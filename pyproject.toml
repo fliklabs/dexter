@@ -1,0 +1,125 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dexter"
+description = "Reusable application framework modules."
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+dependencies = []
+classifiers = ["Typing :: Typed"]
+
+# `requires-python` above is the public compatibility floor and the ONLY hand-edited
+# Python version literal in this repo. Ruff infers `target-version` from it and mypy
+# follows the interpreter `uv run` selects, so neither tool repeats it.
+# `.python-version` is a separate thing: the generated dev/CI interpreter pin, which
+# may legitimately be newer than this floor. See AGENTS.md.
+
+[project.urls]
+Homepage = "https://github.com/fliklabs/dexter"
+
+[tool.hatch.version]
+path = "dexter/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dexter"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/dexter", "/tests", "/README.md", "/LICENSE", "/pyproject.toml"]
+
+[dependency-groups]
+dev = [{ include-group = "test" }, { include-group = "lint" }]
+test = ["pytest>=8.3"]
+lint = ["ruff>=0.9", "mypy>=1.14"]
+
+# ─────────────────────────────── ruff ────────────────────────────────
+[tool.ruff]
+# `target-version` is deliberately omitted so it is inferred from
+# project.requires-python. Never invoke ruff as `ruff --config <file>`: passing a
+# config file explicitly disables that inference.
+line-length = 88
+required-version = ">=0.9"
+
+[tool.ruff.lint]
+# Deliberately NOT selected (see AGENTS.md before adding any of these):
+#   FA  - FA102 auto-adds `from __future__ import annotations`, which turns every
+#         annotation into a string and breaks runtime type introspection.
+#   TC  - moves imports into `if TYPE_CHECKING:`; classes named in annotations that
+#         are resolved at runtime must stay importable at runtime.
+#   ANN - redundant with mypy strict's disallow_untyped_defs.
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "N",
+    "D",
+    "UP",
+    "S",
+    "B",
+    "A",
+    "C4",
+    "DTZ",
+    "T20",
+    "PT",
+    "RET",
+    "SIM",
+    "ARG",
+    "PTH",
+    "ERA",
+    "PL",
+    "TRY",
+    "PERF",
+    "FURB",
+    "PYI",
+    "RUF",
+]
+ignore = [
+    # The formatter owns these; ruff documents them as conflicting with it.
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+    "D206",
+    "D300",
+    # The formatter is only best-effort on line width.
+    "E501",
+    # Magic methods do not need docstrings.
+    "D105",
+    "TRY003",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["dexter"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "D", "PLR2004", "ARG"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ─────────────────────────────── mypy ────────────────────────────────
+[tool.mypy]
+# `python_version` is deliberately omitted so it follows the interpreter running
+# mypy. Always invoke as `uv run mypy`; a global mypy or `uvx mypy` would silently
+# check against a different Python version.
+strict = true
+warn_unreachable = true
+files = ["dexter", "tests"]
+enable_error_code = ["redundant-expr", "possibly-undefined", "truthy-bool"]
+
+# ────────────────────────────── pytest ───────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config", "-ra"]
+xfail_strict = true
+filterwarnings = ["error"]

@@ -1,0 +1,43 @@
+name: Verify
+
+on:
+  workflow_call:
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # No Python version is specified here on purpose: uv resolves it from
+      # .python-version / requires-python, keeping the version defined in one place.
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run verification
+        run: ./verify.sh -v
+
+      - name: Build distribution
+        run: uv build
+
+      - name: Check distribution contents
+        run: |
+          set -euo pipefail
+          wheel="$(ls dist/*.whl)"
+          echo "Inspecting $wheel"
+          contents="$(uv run python -m zipfile -l "$wheel")"
+          echo "$contents"
+          if grep -qE '(^|/)tests/' <<<"$contents"; then
+            echo "ERROR: tests/ leaked into the wheel" >&2
+            exit 1
+          fi
+          if ! grep -q 'dexter/py.typed' <<<"$contents"; then
+            echo "ERROR: dexter/py.typed missing from the wheel" >&2
+            exit 1
+          fi
