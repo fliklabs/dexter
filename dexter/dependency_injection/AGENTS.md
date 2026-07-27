@@ -94,7 +94,7 @@ Three properties, each with a test:
 `asyncio.Lock` is not reentrant.
 
 Do not route every resolution through a task: `create_task` plus `await` costs roughly 500× a
-direct `await`. Cache hits return from a plain dict and `Scope.Transient` is built inline; only
+direct `await`. Cache hits return from a plain dict and `Scope.TRANSIENT` is built inline; only
 the first miss on a cached scope creates a task. `test_concurrency.py` asserts a cached resolve
 never suspends.
 

@@ -79,22 +79,43 @@ per-module markers are wrong.
 
 ## Enums
 
-**Every enum is a `StrEnum` with PascalCase members whose value equals the member name.**
+**Every enum is a `StrEnum` with `UPPER_CASE` members whose value is written out and equals the
+member name.**
 
 ```python
 class Scope(StrEnum):
-    Transient = "Transient"
-    Singleton = "Singleton"
-    Scoped = "Scoped"
+    TRANSIENT = "TRANSIENT"
+    SINGLETON = "SINGLETON"
+    SCOPED = "SCOPED"
 ```
 
-This gives readable error messages and f-strings with no `.value`, JSON serialisation with no
-encoder, and agreement between name lookup and value lookup.
+`UPPER_CASE` is what CPython's enum HOWTO recommends, under the heading "Case of Enum Members":
+*"we strongly recommend using UPPER_CASE names for members"*. Its second stated reason is
+functional, not aesthetic — it avoids collisions between member names and the mixin type's
+attributes, which for a `StrEnum` means every lowercase `str` method (`title`, `strip`, `format`,
+`index`, `count`, `split`). Nothing in PEP 8 addresses enums at all, and no ruff rule enforces
+any casing here, so this is convention: follow it anyway.
 
-- **Never `auto()`.** In a `StrEnum` it lowercases the member name, so renaming a member
-  silently changes the serialised value.
-- **Value must equal the name.** Divergence makes the two lookup forms disagree and makes a
-  serialised value ambiguous about casing.
+**Never `auto()`.** In a `StrEnum` it produces the *lower-cased* member name, which is documented
+behaviour: *"Using `auto` with `StrEnum` results in the lower-cased member name as the value."*
+The consequence is worse than it looks — name lookup and value lookup then accept disjoint
+strings:
+
+| | `Scope["SINGLETON"]` | `Scope("SINGLETON")` | `Scope("singleton")` |
+| --- | --- | --- | --- |
+| `SINGLETON = auto()` | ok | **ValueError** | ok |
+| `SINGLETON = "SINGLETON"` | ok | ok | ValueError |
+
+The HOWTO also describes `auto()` as signalling that *"these values are not important"*, which is
+false for anything that reaches a config file, a log line, or an error message. Write the value.
+
+**Value must equal the name.** One canonical spelling then works everywhere — Python, JSON, tests,
+error messages — and `Scope(x) is Scope[x]` holds. There is direct stdlib precedent in a
+wire-facing `StrEnum`: `http.HTTPMethod` is `GET = "GET"`.
+
+**In developer-facing messages, render the symbol, not the value.** `StrEnum.__str__` returns the
+bare value, so an interpolated member shouts. Use a small `describe_scope`-style helper that
+produces `Scope.SINGLETON` — the text the reader has to type in their own wiring.
 
 ## Data types: pydantic or slotted class
 

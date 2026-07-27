@@ -50,9 +50,9 @@ class TestInheritedConstructors:
     async def test_injects_dependencies_declared_on_a_base_class(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         builder.register(InheritsConstructor).to(
-            InheritsConstructor, scope=Scope.Transient
+            InheritsConstructor, scope=Scope.TRANSIENT
         )
         container = builder.build()
 
@@ -63,7 +63,7 @@ class TestInheritedConstructors:
         self, builder: ContainerBuilder
     ) -> None:
         builder.register(NoConstructorAnywhere).to(
-            NoConstructorAnywhere, scope=Scope.Transient
+            NoConstructorAnywhere, scope=Scope.TRANSIENT
         )
         container = builder.build()
 
@@ -76,8 +76,8 @@ class TestNewBasedConstruction:
     async def test_injects_into_a_namedtuple_which_constructs_via_new(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
-        builder.register(Point).to(Point, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
+        builder.register(Point).to(Point, scope=Scope.TRANSIENT)
         container = builder.build()
 
         point = await container.resolve(Point)
@@ -93,9 +93,9 @@ class TestPartialProviders:
             instance.db.name = label
             return instance
 
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         builder.register(HasConstructor).to(
-            functools.partial(make, "partial"), scope=Scope.Transient
+            functools.partial(make, "partial"), scope=Scope.TRANSIENT
         )
         container = builder.build()
 
@@ -109,14 +109,14 @@ class TestRejectedConstructors:
                 self.kwargs = kwargs
 
         with pytest.raises(Exception, match=r"\*args/\*\*kwargs"):
-            builder.register(TakesKwargs).to(TakesKwargs, scope=Scope.Transient)
+            builder.register(TakesKwargs).to(TakesKwargs, scope=Scope.TRANSIENT)
 
     def test_rejects_a_protocol_as_the_thing_being_constructed(
         self, builder: ContainerBuilder
     ) -> None:
         provider: Any = Greeter
         with pytest.raises(Exception, match="Protocol"):
-            builder.register(Greeter).to(provider, scope=Scope.Transient)
+            builder.register(Greeter).to(provider, scope=Scope.TRANSIENT)
 
 
 class TestPrimitiveParameters:
@@ -127,7 +127,7 @@ class TestPrimitiveParameters:
             def __init__(self, name: str = "fallback") -> None:
                 self.name = name
 
-        builder.register(TakesPrimitive).to(TakesPrimitive, scope=Scope.Transient)
+        builder.register(TakesPrimitive).to(TakesPrimitive, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert (await container.resolve(TakesPrimitive)).name == "fallback"
@@ -139,7 +139,7 @@ class TestPrimitiveParameters:
             def __init__(self, name: str) -> None:
                 self.name = name
 
-        builder.register(NeedsPrimitive).to(NeedsPrimitive, scope=Scope.Transient)
+        builder.register(NeedsPrimitive).to(NeedsPrimitive, scope=Scope.TRANSIENT)
         container = builder.build()
 
         # `str` is not registered, and nothing should be invented for it.
@@ -158,7 +158,7 @@ class TestSyncProviderReturningAwaitable:
             # Undetectable as async without calling it, so it is classified as sync.
             return inner()
 
-        builder.register(Db).to(looks_sync, scope=Scope.Transient)
+        builder.register(Db).to(looks_sync, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(Exception, match="returned an awaitable"):
@@ -187,7 +187,7 @@ class TestResolutionDepthCeiling:
                 self.second = second
 
         for cls in (Third, Second, First):
-            builder.register(cls).to(cls, scope=Scope.Transient)
+            builder.register(cls).to(cls, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(ResolutionDepthExceededError, match="probably cyclic"):
@@ -197,7 +197,7 @@ class TestResolutionDepthCeiling:
         self, builder: ContainerBuilder, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(ResolutionChain, "MAX_DEPTH", 10)
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         assert isinstance(await container.resolve(Db), Db)
@@ -221,7 +221,7 @@ class TestAwaitableWithoutClose:
         def looks_sync() -> Any:
             return BareAwaitable()
 
-        builder.register(Db).to(looks_sync, scope=Scope.Transient)
+        builder.register(Db).to(looks_sync, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(InvalidRegistrationError, match="returned an awaitable"):

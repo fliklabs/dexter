@@ -80,16 +80,16 @@ class TestCaptiveDependencyIsRejected:
 
     def test_direct_singleton_to_scoped_edge_is_rejected_at_build(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
-        builder.register(AppService).to(AppService, scope=Scope.Singleton)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
+        builder.register(AppService).to(AppService, scope=Scope.SINGLETON)
 
-        with pytest.raises(CaptiveDependencyError, match="Scoped"):
+        with pytest.raises(CaptiveDependencyError, match=r"Scope\.SCOPED"):
             builder.build()
 
     def test_the_error_names_both_ends_of_the_edge(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
-        builder.register(AppService).to(AppService, scope=Scope.Singleton)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
+        builder.register(AppService).to(AppService, scope=Scope.SINGLETON)
 
         with pytest.raises(CaptiveDependencyError) as raised:
             builder.build()
@@ -102,17 +102,17 @@ class TestCaptiveDependencyIsRejected:
         # Singleton -> Transient -> Scoped is still captive: the whole subgraph is built once,
         # on the root, so the scoped instance is captured just as permanently.
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
-        builder.register(Middleman).to(Middleman, scope=Scope.Transient)
-        builder.register(IndirectService).to(IndirectService, scope=Scope.Singleton)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
+        builder.register(Middleman).to(Middleman, scope=Scope.TRANSIENT)
+        builder.register(IndirectService).to(IndirectService, scope=Scope.SINGLETON)
 
         with pytest.raises(CaptiveDependencyError):
             builder.build()
 
     def test_nothing_is_constructed_before_the_error(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
-        builder.register(AppService).to(AppService, scope=Scope.Singleton)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
+        builder.register(AppService).to(AppService, scope=Scope.SINGLETON)
 
         with pytest.raises(CaptiveDependencyError):
             builder.build()
@@ -124,29 +124,29 @@ class TestCaptiveDependencyIsRejected:
         # Taking the container defers resolution to whatever scope is asking, so the singleton
         # never holds a scoped instance and the binding is legitimate.
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
-        builder.register(LazyService).to(LazyService, scope=Scope.Singleton)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
+        builder.register(LazyService).to(LazyService, scope=Scope.SINGLETON)
 
         assert builder.build().is_registered(LazyService)
 
     def test_a_scoped_consumer_of_a_scoped_dependency_is_allowed(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
-        builder.register(AppService).to(AppService, scope=Scope.Scoped)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
+        builder.register(AppService).to(AppService, scope=Scope.SCOPED)
 
         assert builder.build().is_registered(AppService)
 
     def test_a_transient_consumer_of_a_scoped_dependency_is_allowed(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
-        builder.register(AppService).to(AppService, scope=Scope.Transient)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
+        builder.register(AppService).to(AppService, scope=Scope.TRANSIENT)
 
         assert builder.build().is_registered(AppService)
 
     def test_a_singleton_depending_on_a_singleton_is_allowed(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Singleton)
-        builder.register(AppService).to(AppService, scope=Scope.Singleton)
+        builder.register(Session).to(Session, scope=Scope.SINGLETON)
+        builder.register(AppService).to(AppService, scope=Scope.SINGLETON)
 
         assert builder.build().is_registered(AppService)
 
@@ -156,7 +156,7 @@ class TestScopedCannotBeResolvedFromTheRoot:
 
     async def test_resolving_a_scoped_key_from_the_root_raises(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
         container = builder.build()
 
         with pytest.raises(ScopeRequiredError, match="only be resolved inside a scope"):
@@ -164,7 +164,7 @@ class TestScopedCannotBeResolvedFromTheRoot:
 
     async def test_the_error_suggests_opening_a_scope(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
         container = builder.build()
 
         with pytest.raises(ScopeRequiredError) as raised:
@@ -174,7 +174,7 @@ class TestScopedCannotBeResolvedFromTheRoot:
 
     async def test_nothing_is_constructed_when_it_is_refused(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
         container = builder.build()
 
         with pytest.raises(ScopeRequiredError):
@@ -183,7 +183,7 @@ class TestScopedCannotBeResolvedFromTheRoot:
 
     async def test_the_same_key_resolves_happily_inside_a_scope(self) -> None:
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -233,7 +233,7 @@ class TestCloseIsTerminal:
         # second instance and re-cached it there. Counting constructions is what catches that;
         # comparing identities alone would not.
         builder = ContainerBuilder()
-        builder.register(Pool).to(Pool, scope=Scope.Singleton)
+        builder.register(Pool).to(Pool, scope=Scope.SINGLETON)
         container = builder.build()
 
         await container.resolve(Pool)
@@ -257,7 +257,7 @@ class TestCloseIsTerminal:
     async def test_closing_an_inner_scope_leaves_its_parent_usable(self) -> None:
         # The fix must not over-reach: closing downwards must not disable upwards.
         builder = ContainerBuilder()
-        builder.register(Session).to(Session, scope=Scope.Scoped)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as outer:
@@ -307,8 +307,8 @@ class TestDefaultsDoNotHideDeepFailures:
 
     async def test_a_missing_transitive_dependency_still_raises(self) -> None:
         builder = ContainerBuilder()
-        builder.register(NeedsMissing).to(NeedsMissing, scope=Scope.Transient)
-        builder.register(HasDefault).to(HasDefault, scope=Scope.Transient)
+        builder.register(NeedsMissing).to(NeedsMissing, scope=Scope.TRANSIENT)
+        builder.register(HasDefault).to(HasDefault, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(UnregisteredDependencyError) as raised:
@@ -318,8 +318,8 @@ class TestDefaultsDoNotHideDeepFailures:
 
     async def test_the_error_names_the_path_to_the_real_problem(self) -> None:
         builder = ContainerBuilder()
-        builder.register(NeedsMissing).to(NeedsMissing, scope=Scope.Transient)
-        builder.register(HasDefault).to(HasDefault, scope=Scope.Transient)
+        builder.register(NeedsMissing).to(NeedsMissing, scope=Scope.TRANSIENT)
+        builder.register(HasDefault).to(HasDefault, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(UnregisteredDependencyError) as raised:
@@ -333,7 +333,7 @@ class TestDefaultsDoNotHideDeepFailures:
         # The narrowing must not break the feature: when the annotated key itself is
         # unregistered, the default is still used.
         builder = ContainerBuilder()
-        builder.register(HasDefault).to(HasDefault, scope=Scope.Transient)
+        builder.register(HasDefault).to(HasDefault, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert (await container.resolve(HasDefault)).inner is None

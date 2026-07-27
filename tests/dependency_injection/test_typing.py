@@ -34,10 +34,10 @@ async def async_returns_an_int() -> int:
 
 
 builder = ContainerBuilder()
-builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
-builder.register(Greeter).to(Hello, scope=Scope.Singleton)
-builder.register(Repository).to(returns_an_int, scope=Scope.Transient)
-builder.register(Repository).to(async_returns_an_int, scope=Scope.Transient)
+builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
+builder.register(Greeter).to(Hello, scope=Scope.SINGLETON)
+builder.register(Repository).to(returns_an_int, scope=Scope.TRANSIENT)
+builder.register(Repository).to(async_returns_an_int, scope=Scope.TRANSIENT)
 builder.register(Greeter).to_instance(42)
 builder.register(Repository).to(SqlRepository)
 '''
@@ -60,9 +60,9 @@ async def open_repository(db: Db) -> Repository:
 
 
 builder = ContainerBuilder()
-builder.register(Db).to(Db, scope=Scope.Singleton)
-builder.register(Repository).to(SqlRepository, scope=Scope.Scoped)
-builder.register(Greeter).to(Hello, scope=Scope.Singleton)
+builder.register(Db).to(Db, scope=Scope.SINGLETON)
+builder.register(Repository).to(SqlRepository, scope=Scope.SCOPED)
+builder.register(Greeter).to(Hello, scope=Scope.SINGLETON)
 builder.register(Greeter).to_instance(Hello())
 
 

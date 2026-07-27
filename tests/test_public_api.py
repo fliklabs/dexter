@@ -94,7 +94,7 @@ class TestDependencyInjectionSurface:
         assert all(issubclass(error, DependencyInjectionError) for error in errors)
 
     def test_the_scope_members_are_the_conventional_three(self) -> None:
-        assert [scope.value for scope in Scope] == ["Transient", "Singleton", "Scoped"]
+        assert [scope.value for scope in Scope] == ["TRANSIENT", "SINGLETON", "SCOPED"]
 
     def test_scope_values_match_their_member_names(self) -> None:
         # The repo-wide enum convention; see AGENTS.md.

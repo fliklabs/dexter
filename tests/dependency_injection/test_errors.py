@@ -69,8 +69,8 @@ class TestChainRendering:
         self, builder: ContainerBuilder
     ) -> None:
         # Handler -> Repository -> Db, with Db deliberately unregistered.
-        builder.register(Handler).to(Handler, scope=Scope.Transient)
-        builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
+        builder.register(Handler).to(Handler, scope=Scope.TRANSIENT)
+        builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(UnregisteredDependencyError) as raised:
@@ -85,8 +85,8 @@ class TestChainRendering:
     async def test_the_short_message_stays_a_one_liner_for_matching_and_logs(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Handler).to(Handler, scope=Scope.Transient)
-        builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
+        builder.register(Handler).to(Handler, scope=Scope.TRANSIENT)
+        builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(UnregisteredDependencyError) as raised:
@@ -102,8 +102,8 @@ class TestChainRendering:
     async def test_exposes_the_offending_key_programmatically(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Handler).to(Handler, scope=Scope.Transient)
-        builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
+        builder.register(Handler).to(Handler, scope=Scope.TRANSIENT)
+        builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(UnregisteredDependencyError) as raised:

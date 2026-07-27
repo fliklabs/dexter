@@ -50,11 +50,11 @@ within a single scope
 
 Those two blocks are the whole point:
 
-- `ConnectionPool#1` is identical in all three jobs — **`Scope.Singleton`**, one per container
+- `ConnectionPool#1` is identical in all three jobs — **`Scope.SINGLETON`**, one per container
   graph, built once by an async factory.
-- The repository differs per job but repeats within a single scope — **`Scope.Scoped`**, the
+- The repository differs per job but repeats within a single scope — **`Scope.SCOPED`**, the
   natural lifetime for per-request state such as a unit of work.
-- The context differs every single time — **`Scope.Transient`**.
+- The context differs every single time — **`Scope.TRANSIENT`**.
 
 The walkthrough then covers self-injection (a `Container` parameter receives whichever container
 is resolving, so a dependency resolved inside a scope sees that scope), an optional dependency

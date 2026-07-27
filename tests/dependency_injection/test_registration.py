@@ -19,12 +19,12 @@ class TestDuplicates:
     def test_raises_when_a_key_is_registered_twice(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         with pytest.raises(DuplicateRegistrationError, match="already registered"):
             builder.register(Db)
 
     def test_names_the_duplicated_key(self, builder: ContainerBuilder) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         with pytest.raises(DuplicateRegistrationError, match="Db"):
             builder.register(Db)
 
@@ -45,7 +45,7 @@ class TestIncompleteBindings:
     def test_build_succeeds_once_the_binding_is_completed(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         assert builder.build().is_registered(Db)
 
 
@@ -62,15 +62,15 @@ class TestInvalidProviders:
     ) -> None:
         not_callable: Any = 42
         with pytest.raises(InvalidRegistrationError, match="not callable"):
-            builder.register(Db).to(not_callable, scope=Scope.Singleton)
+            builder.register(Db).to(not_callable, scope=Scope.SINGLETON)
 
     def test_rejects_a_protocol_as_a_provider(self, builder: ContainerBuilder) -> None:
         protocol_provider: Any = Greeter
         with pytest.raises(InvalidRegistrationError, match="Protocol"):
-            builder.register(Greeter).to(protocol_provider, scope=Scope.Singleton)
+            builder.register(Greeter).to(protocol_provider, scope=Scope.SINGLETON)
 
     def test_accepts_a_protocol_as_a_key(self, builder: ContainerBuilder) -> None:
-        builder.register(Greeter).to(Hello, scope=Scope.Singleton)
+        builder.register(Greeter).to(Hello, scope=Scope.SINGLETON)
         assert builder.build().is_registered(Greeter)
 
 
@@ -84,7 +84,7 @@ class TestEagerPlanning:
 
         provider: Any = Unannotated
         with pytest.raises(Exception, match="no annotation"):
-            builder.register(Unannotated).to(provider, scope=Scope.Transient)
+            builder.register(Unannotated).to(provider, scope=Scope.TRANSIENT)
 
     def test_var_args_fails_at_registration(self, builder: ContainerBuilder) -> None:
         class Varargs:
@@ -92,7 +92,7 @@ class TestEagerPlanning:
                 self.args = args
 
         with pytest.raises(Exception, match=r"\*args"):
-            builder.register(Varargs).to(Varargs, scope=Scope.Transient)
+            builder.register(Varargs).to(Varargs, scope=Scope.TRANSIENT)
 
     def test_positional_only_parameter_fails_at_registration(
         self, builder: ContainerBuilder
@@ -102,7 +102,7 @@ class TestEagerPlanning:
                 self.db = db
 
         with pytest.raises(Exception, match="positional-only"):
-            builder.register(PositionalOnly).to(PositionalOnly, scope=Scope.Transient)
+            builder.register(PositionalOnly).to(PositionalOnly, scope=Scope.TRANSIENT)
 
     def test_unresolvable_annotation_fails_at_registration(
         self, builder: ContainerBuilder
@@ -114,7 +114,7 @@ class TestEagerPlanning:
                 self.dependency = dependency
 
         with pytest.raises(Exception, match="does not exist at runtime"):
-            builder.register(NeedsMissing).to(NeedsMissing, scope=Scope.Transient)
+            builder.register(NeedsMissing).to(NeedsMissing, scope=Scope.TRANSIENT)
 
 
 class TestResolveInstance:
@@ -130,7 +130,7 @@ class TestResolveInstance:
     def test_raises_for_a_key_not_registered_as_an_instance(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
+        builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
         with pytest.raises(
             InvalidRegistrationError, match="not registered as an instance"
         ):

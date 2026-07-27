@@ -245,7 +245,7 @@ def build_plan(provider: object, container_type: type[Any]) -> DependencyPlan:
             parameters.append(
                 PlannedParameter(
                     parameter.name,
-                    ParameterKind.Optional,
+                    ParameterKind.OPTIONAL,
                     optional,
                     has_default=has_default,
                 )
@@ -254,7 +254,7 @@ def build_plan(provider: object, container_type: type[Any]) -> DependencyPlan:
             parameters.append(
                 PlannedParameter(
                     parameter.name,
-                    ParameterKind.Container,
+                    ParameterKind.CONTAINER,
                     None,
                     has_default=has_default,
                 )
@@ -263,7 +263,7 @@ def build_plan(provider: object, container_type: type[Any]) -> DependencyPlan:
             parameters.append(
                 PlannedParameter(
                     parameter.name,
-                    ParameterKind.Dependency,
+                    ParameterKind.DEPENDENCY,
                     hint,
                     has_default=has_default,
                 )

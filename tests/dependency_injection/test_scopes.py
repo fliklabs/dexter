@@ -32,7 +32,7 @@ class TestTransient:
     async def test_returns_a_new_instance_for_every_resolution(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert await container.resolve(Db) is not await container.resolve(Db)
@@ -42,13 +42,13 @@ class TestSingleton:
     async def test_returns_the_same_instance_for_every_resolution(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         assert await container.resolve(Db) is await container.resolve(Db)
 
     async def test_is_shared_across_scopes(self, builder: ContainerBuilder) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         async with container.scope() as first, container.scope() as second:
@@ -57,7 +57,7 @@ class TestSingleton:
     async def test_a_scope_sees_the_instance_the_root_already_built(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         from_root = await container.resolve(Db)
@@ -69,7 +69,7 @@ class TestScoped:
     async def test_returns_the_same_instance_within_one_scope(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -78,7 +78,7 @@ class TestScoped:
     async def test_returns_different_instances_in_different_scopes(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as first, container.scope() as second:
@@ -87,7 +87,7 @@ class TestScoped:
     async def test_a_nested_scope_gets_its_own_instance(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as outer:
@@ -102,7 +102,7 @@ class TestNestingDepth:
     async def test_three_levels_each_get_their_own_scoped_instance(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as one, one.scope() as two, two.scope() as three:
@@ -117,7 +117,7 @@ class TestNestingDepth:
     async def test_a_singleton_is_identical_at_every_depth(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         from_root = await container.resolve(Db)
@@ -129,7 +129,7 @@ class TestNestingDepth:
     async def test_a_transient_is_distinct_inside_a_nested_scope(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.TRANSIENT)
         container = builder.build()
 
         async with container.scope() as one, one.scope() as two:
@@ -143,7 +143,7 @@ class TestNestingDepth:
         self, builder: ContainerBuilder
     ) -> None:
         # The reverse of the existing root-first test: ownership is the root's either way.
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -158,8 +158,8 @@ class TestScopedOwnershipThroughDependencies:
     async def test_a_transient_consumer_gets_its_own_scopes_dependency(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Leaf).to(Leaf, scope=Scope.Scoped)
-        builder.register(TransientHolder).to(TransientHolder, scope=Scope.Transient)
+        builder.register(Leaf).to(Leaf, scope=Scope.SCOPED)
+        builder.register(TransientHolder).to(TransientHolder, scope=Scope.TRANSIENT)
         container = builder.build()
 
         async with container.scope() as one, one.scope() as two:
@@ -175,8 +175,8 @@ class TestScopedOwnershipThroughDependencies:
     async def test_a_scoped_consumer_gets_its_own_scopes_dependency(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Leaf).to(Leaf, scope=Scope.Scoped)
-        builder.register(ScopedHolder).to(ScopedHolder, scope=Scope.Scoped)
+        builder.register(Leaf).to(Leaf, scope=Scope.SCOPED)
+        builder.register(ScopedHolder).to(ScopedHolder, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as one, one.scope() as two:
@@ -186,9 +186,9 @@ class TestScopedOwnershipThroughDependencies:
     async def test_two_consumers_in_one_scope_share_one_scoped_dependency(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Leaf).to(Leaf, scope=Scope.Scoped)
-        builder.register(ScopedHolder).to(ScopedHolder, scope=Scope.Scoped)
-        builder.register(TransientHolder).to(TransientHolder, scope=Scope.Transient)
+        builder.register(Leaf).to(Leaf, scope=Scope.SCOPED)
+        builder.register(ScopedHolder).to(ScopedHolder, scope=Scope.SCOPED)
+        builder.register(TransientHolder).to(TransientHolder, scope=Scope.TRANSIENT)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -201,7 +201,7 @@ class TestScopeIsolation:
     """Sibling and cousin scopes never share a scoped instance."""
 
     async def test_cousin_scopes_do_not_share(self, builder: ContainerBuilder) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         # Later items in one `async with` may reference earlier ones, so the two generations
@@ -217,7 +217,7 @@ class TestScopeIsolation:
     async def test_a_parents_instance_survives_its_child_closing(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as parent:
@@ -257,7 +257,7 @@ class TestInstanceBindingsIgnoreScoping:
     ) -> None:
         sentinel = Leaf()
         builder.register(Leaf).to_instance(sentinel)
-        builder.register(TransientHolder).to(TransientHolder, scope=Scope.Transient)
+        builder.register(TransientHolder).to(TransientHolder, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert (await container.resolve(TransientHolder)).leaf is sentinel

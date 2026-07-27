@@ -16,7 +16,7 @@ class TestContainerClose:
     async def test_resolving_after_close_raises(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
         await container.aclose()
 
@@ -40,7 +40,7 @@ class TestContainerClose:
     async def test_the_container_is_usable_as_a_context_manager(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         async with container as entered:
@@ -54,7 +54,7 @@ class TestScopeClose:
     async def test_resolving_after_the_scope_exits_raises_scope_closed(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -66,7 +66,7 @@ class TestScopeClose:
     async def test_closing_a_scope_leaves_the_container_usable(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -107,7 +107,7 @@ class TestClosingDetails:
     async def test_a_scope_closes_even_when_its_body_raises(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         scope = container.scope()
@@ -129,7 +129,7 @@ class TestClosingDetails:
     ) -> None:
         # Deliberately not guarded: asking what a container was configured with is harmless
         # after close, and callers use it while wiring diagnostics.
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
         await container.aclose()
 
@@ -138,7 +138,7 @@ class TestClosingDetails:
     async def test_entering_an_already_closed_container_defers_the_error_to_resolve(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
         await container.aclose()
 

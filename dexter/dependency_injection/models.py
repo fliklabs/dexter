@@ -35,26 +35,26 @@ class Scope(StrEnum):
     `Binder.to` requires it explicitly rather than letting it be chosen by omission.
     """
 
-    Transient = "Transient"
+    TRANSIENT = "TRANSIENT"
     """A new instance for every resolution. Never cached."""
 
-    Singleton = "Singleton"
+    SINGLETON = "SINGLETON"
     """One instance for the whole container graph, cached on the root container."""
 
-    Scoped = "Scoped"
+    SCOPED = "SCOPED"
     """One instance per scope, cached on the scope that resolved it."""
 
 
 class ParameterKind(StrEnum):
     """How a constructor parameter is satisfied."""
 
-    Dependency = "Dependency"
+    DEPENDENCY = "DEPENDENCY"
     """Resolved from the container. An eager edge for cycle detection."""
 
-    Optional = "Optional"
+    OPTIONAL = "OPTIONAL"
     """Annotated `X | None`: resolved if possible, otherwise `None`."""
 
-    Container = "Container"
+    CONTAINER = "CONTAINER"
     """The resolving container itself. Not an edge — nothing is recursed into."""
 
 
@@ -119,6 +119,16 @@ class ResolutionStep:
         """Record a key and, if it was reached from one, the parameter that led to it."""
         self.key = key
         self.parameter = parameter
+
+
+def describe_scope(scope: Scope) -> str:
+    """Render a scope as the symbol a caller would type, such as `Scope.SINGLETON`.
+
+    Interpolating the member directly would print only its bare value, because `StrEnum.__str__`
+    returns the value. In a developer-facing message the qualified symbol is more useful: it is
+    exactly what the reader has to write in their wiring.
+    """
+    return f"Scope.{scope.name}"
 
 
 def describe_key(key: object) -> str:

@@ -46,32 +46,32 @@ def build_container(
 
     # Singleton: one per container graph, shared by every scope. Opened by an async factory,
     # because `__init__` cannot await.
-    builder.register(ConnectionPool).to(open_pool, scope=Scope.Singleton)
+    builder.register(ConnectionPool).to(open_pool, scope=Scope.SINGLETON)
 
     # A protocol key bound to a concrete class, with no suppression needed at the call site.
-    builder.register(Clock).to(SystemClock, scope=Scope.Singleton)
+    builder.register(Clock).to(SystemClock, scope=Scope.SINGLETON)
 
     # Scoped: one per `container.scope()`. The natural lifetime for per-request state such as
     # a unit of work.
-    builder.register(Repository).to(InMemoryRepository, scope=Scope.Scoped)
+    builder.register(Repository).to(InMemoryRepository, scope=Scope.SCOPED)
 
     # Transient: a new instance on every single resolution.
-    builder.register(RequestContext).to(RequestContext, scope=Scope.Transient)
+    builder.register(RequestContext).to(RequestContext, scope=Scope.TRANSIENT)
 
-    builder.register(JobHandler).to(JobHandler, scope=Scope.Transient)
+    builder.register(JobHandler).to(JobHandler, scope=Scope.TRANSIENT)
 
     # Scoped, emphatically not Singleton. The dispatcher takes a `Container` and resolves
     # handlers from it, so its lifetime decides which container those handlers come from. As a
     # singleton it would capture the root and resolve every handler there, bypassing the scope
     # it was asked for — and since `JobHandler` needs the scoped `Repository`, that now fails
     # loudly with `ScopeRequiredError` instead of quietly sharing one repository everywhere.
-    builder.register(JobDispatcher).to(JobDispatcher, scope=Scope.Scoped)
+    builder.register(JobDispatcher).to(JobDispatcher, scope=Scope.SCOPED)
 
     # Registered, but its own `ArchiveStore` dependency deliberately is not — so resolving it
     # demonstrates what a resolution failure reports.
-    builder.register(ArchiveJobHandler).to(ArchiveJobHandler, scope=Scope.Transient)
+    builder.register(ArchiveJobHandler).to(ArchiveJobHandler, scope=Scope.TRANSIENT)
 
     if with_notifier:
-        builder.register(Notifier).to(ConsoleNotifier, scope=Scope.Singleton)
+        builder.register(Notifier).to(ConsoleNotifier, scope=Scope.SINGLETON)
 
     return builder.build()

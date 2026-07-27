@@ -43,8 +43,8 @@ builds:
 from dexter.dependency_injection import ContainerBuilder, Scope
 
 builder = ContainerBuilder()
-builder.register(Repository).to(SqlRepository, scope=Scope.Scoped)
-builder.register(Pool).to(open_pool, scope=Scope.Singleton)  # async factory
+builder.register(Repository).to(SqlRepository, scope=Scope.SCOPED)
+builder.register(Pool).to(open_pool, scope=Scope.SINGLETON)  # async factory
 builder.register(Clock).to_instance(SystemClock())
 
 container = builder.build()
@@ -58,9 +58,9 @@ required: lifetime is too consequential to be chosen by omission.
 
 | Scope | Lifetime |
 | --- | --- |
-| `Scope.Transient` | A new instance for every resolution |
-| `Scope.Singleton` | One instance permeating every scope |
-| `Scope.Scoped` | One instance spanning every resolution within one scope |
+| `Scope.TRANSIENT` | A new instance for every resolution |
+| `Scope.SINGLETON` | One instance permeating every scope |
+| `Scope.SCOPED` | One instance spanning every resolution within one scope |
 
 **A dependency must live at least as long as whatever depends on it.** In practice that means a
 `Singleton` may not depend on a `Scoped` key — it would outlive the scope and capture one scope's
@@ -100,7 +100,7 @@ Registration and resolution accept abstract classes and `Protocol`s directly —
 
 ```python
 # Repository is an ABC; SqlRepository implements it.
-builder.register(Repository).to(SqlRepository, scope=Scope.Scoped)
+builder.register(Repository).to(SqlRepository, scope=Scope.SCOPED)
 
 # Inferred as Repository, with no suppression at the call site.
 repository = await container.resolve(Repository)
@@ -110,7 +110,7 @@ Binding is deliberately two calls because that is what makes the provider checka
 mypy will reject a provider that cannot produce the key:
 
 ```python
-builder.register(Repository).to(returns_an_int, scope=Scope.Transient)
+builder.register(Repository).to(returns_an_int, scope=Scope.TRANSIENT)
 # error: Argument 1 to "to" of "Binder" has incompatible type "Callable[[], int]";
 #        expected "type[Repository] | Callable[..., Repository]
 #                  | Callable[..., Awaitable[Repository]]"  [arg-type]

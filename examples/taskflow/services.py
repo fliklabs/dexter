@@ -24,7 +24,7 @@ from .domain import (
 class ConnectionPool:
     """A connection pool that has to be opened before use.
 
-    Bound as a `Scope.Singleton` through an async factory, because opening it is awaitable and
+    Bound as a `Scope.SINGLETON` through an async factory, because opening it is awaitable and
     a constructor cannot be. One of these should exist per process.
     """
 
@@ -73,7 +73,7 @@ class ConsoleNotifier:
 class InMemoryRepository(Repository):
     """A `Repository` holding results in memory.
 
-    Bound as `Scope.Scoped`, so each scope gets its own — which is what you want for anything
+    Bound as `Scope.SCOPED`, so each scope gets its own — which is what you want for anything
     holding per-request state, such as a transaction or a unit of work.
     """
 
@@ -99,7 +99,7 @@ _request_numbers = itertools.count(1)
 class RequestContext:
     """Per-resolution correlation state.
 
-    Bound as `Scope.Transient`, so every resolution produces a new one. Useful for anything
+    Bound as `Scope.TRANSIENT`, so every resolution produces a new one. Useful for anything
     that must never be shared, and the clearest way to see the difference from the other two
     scopes.
     """

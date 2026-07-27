@@ -3,8 +3,8 @@
 Wire an application with a `ContainerBuilder`, then resolve from the `Container` it builds::
 
     builder = ContainerBuilder()
-    builder.register(Repository).to(SqlRepository, scope=Scope.Scoped)
-    builder.register(Pool).to(open_pool, scope=Scope.Singleton)
+    builder.register(Repository).to(SqlRepository, scope=Scope.SCOPED)
+    builder.register(Pool).to(open_pool, scope=Scope.SINGLETON)
     container = builder.build()
 
     async with container.scope() as scope:

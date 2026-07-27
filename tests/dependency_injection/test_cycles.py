@@ -40,8 +40,8 @@ class SelfDependent:
 
 def register_cycle(builder: ContainerBuilder) -> Container:
     """Wire the two-node cycle and build the container."""
-    builder.register(Left).to(Left, scope=Scope.Transient)
-    builder.register(Right).to(Right, scope=Scope.Transient)
+    builder.register(Left).to(Left, scope=Scope.TRANSIENT)
+    builder.register(Right).to(Right, scope=Scope.TRANSIENT)
     return builder.build()
 
 
@@ -75,7 +75,7 @@ class TestEagerCycles:
     async def test_rejects_a_class_that_depends_on_itself(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(SelfDependent).to(SelfDependent, scope=Scope.Transient)
+        builder.register(SelfDependent).to(SelfDependent, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(CircularDependencyError):
@@ -84,8 +84,8 @@ class TestEagerCycles:
     async def test_a_cycle_is_detected_for_singletons_too(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Left).to(Left, scope=Scope.Singleton)
-        builder.register(Right).to(Right, scope=Scope.Singleton)
+        builder.register(Left).to(Left, scope=Scope.SINGLETON)
+        builder.register(Right).to(Right, scope=Scope.SINGLETON)
         container = builder.build()
 
         with pytest.raises(CircularDependencyError):
@@ -102,7 +102,7 @@ class TestNonCycles:
             def __init__(self, container: Container) -> None:
                 self.container = container
 
-        builder.register(UsesLocator).to(UsesLocator, scope=Scope.Transient)
+        builder.register(UsesLocator).to(UsesLocator, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert isinstance(await container.resolve(UsesLocator), UsesLocator)
@@ -123,9 +123,9 @@ class TestNonCycles:
                 self.left = left
                 self.right = right
 
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         for cls in (LeftArm, RightArm, Top):
-            builder.register(cls).to(cls, scope=Scope.Transient)
+            builder.register(cls).to(cls, scope=Scope.TRANSIENT)
         container = builder.build()
 
         top = await container.resolve(Top)
@@ -134,7 +134,7 @@ class TestNonCycles:
     async def test_the_same_key_can_be_resolved_twice_in_sequence(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.TRANSIENT)
         container = builder.build()
 
         await container.resolve(Db)

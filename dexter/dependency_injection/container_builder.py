@@ -27,6 +27,7 @@ from .models import (
     Registration,
     Scope,
     describe_key,
+    describe_scope,
 )
 
 
@@ -79,7 +80,7 @@ class Binder[T]:
             Registration(
                 key=self._key,
                 provider=type(instance),
-                scope=Scope.Singleton,
+                scope=Scope.SINGLETON,
                 instance=instance,
                 has_instance=True,
             ),
@@ -168,16 +169,17 @@ class ContainerBuilder:
         reached through it is captured just as permanently.
         """
         for key, registration in self._registry.items():
-            if registration.scope is not Scope.Singleton or registration.has_instance:
+            if registration.scope is not Scope.SINGLETON or registration.has_instance:
                 continue
             path = self._find_scoped_dependency(key, (describe_key(key),), {key})
             if path is not None:
                 raise CaptiveDependencyError(
-                    f"{describe_key(key)} is registered as {Scope.Singleton} but depends on "
-                    f"{path[-1]}, which is {Scope.Scoped}. A singleton outlives every scope, "
-                    f"so it would capture one scope's instance and share it with all the "
-                    f"others. Register the dependent as {Scope.Scoped}, or take a `Container` "
-                    f"parameter and resolve the scoped dependency when you need it.",
+                    f"{describe_key(key)} is registered as {describe_scope(Scope.SINGLETON)} "
+                    f"but depends on {path[-1]}, which is {describe_scope(Scope.SCOPED)}. A "
+                    f"singleton outlives every scope, so it would capture one scope's instance "
+                    f"and share it with all the others. Register the dependent as "
+                    f"{describe_scope(Scope.SCOPED)}, or take a `Container` parameter and "
+                    f"resolve the scoped dependency when you need it.",
                     path,
                 )
 
@@ -191,13 +193,13 @@ class ContainerBuilder:
         for parameter in plan.parameters:
             # A `Container` parameter is a lazy boundary: resolution happens later, against
             # whichever container is asking, so nothing is captured here.
-            if parameter.kind is ParameterKind.Container or parameter.key is None:
+            if parameter.kind is ParameterKind.CONTAINER or parameter.key is None:
                 continue
             dependency = self._registry.get(parameter.key)
             if dependency is None:
                 continue  # Unregistered; resolution will report it far more clearly.
             step = f"{describe_key(parameter.key)} (parameter {parameter.name!r})"
-            if dependency.scope is Scope.Scoped:
+            if dependency.scope is Scope.SCOPED:
                 return (*path, step)
             if parameter.key in seen:
                 continue  # A cycle; `CircularDependencyError` is the right report for it.

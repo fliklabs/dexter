@@ -7,7 +7,7 @@ rendered chain.
 
 from dexter.commons import DexterError
 
-from .models import ResolutionChain, Scope, describe_key
+from .models import ResolutionChain, Scope, describe_key, describe_scope
 
 
 class DependencyInjectionError(DexterError):
@@ -45,14 +45,14 @@ class InvalidRegistrationError(RegistrationError):
 
 
 class CaptiveDependencyError(RegistrationError):
-    """A `Scope.Singleton` binding depends, transitively, on a `Scope.Scoped` one.
+    """A `Scope.SINGLETON` binding depends, transitively, on a `Scope.SCOPED` one.
 
     A singleton outlives every scope, so there is no scope whose instance it could
     legitimately hold: whichever it captured first would be shared by every later scope for
     the lifetime of the process. Raised by `ContainerBuilder.build`, so the mistake surfaces
     while wiring rather than as inexplicably shared state at runtime.
 
-    Rebind the dependent as `Scope.Scoped`, or take a `Container` parameter and resolve the
+    Rebind the dependent as `Scope.SCOPED`, or take a `Container` parameter and resolve the
     scoped dependency when it is needed rather than holding it.
     """
 
@@ -109,9 +109,9 @@ class UnregisteredDependencyError(ResolutionError):
 
 
 class ScopeRequiredError(ResolutionError):
-    """A `Scope.Scoped` key was resolved from a container that is not a scope.
+    """A `Scope.SCOPED` key was resolved from a container that is not a scope.
 
-    `Scope.Scoped` means one instance per scoped container, and the root is not one — so there
+    `Scope.SCOPED` means one instance per scoped container, and the root is not one — so there
     is no instance to hand back. Caching it on the root instead would quietly turn it into a
     singleton shared by the whole process, which is the trap this replaces.
 
@@ -121,8 +121,8 @@ class ScopeRequiredError(ResolutionError):
     def __init__(self, key: object, chain: ResolutionChain) -> None:
         """Name the scoped key that was asked for outside any scope."""
         super().__init__(
-            f"{describe_key(key)} is registered as {Scope.Scoped} and can only be resolved "
-            f"inside a scope; this container is the root. "
+            f"{describe_key(key)} is registered as {describe_scope(Scope.SCOPED)} and can "
+            f"only be resolved inside a scope; this container is the root. "
             f"Use `async with container.scope() as scope:` and resolve from the scope.",
             chain,
         )

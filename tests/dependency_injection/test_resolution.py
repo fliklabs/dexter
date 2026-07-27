@@ -16,16 +16,16 @@ class TestHappyPath:
     async def test_resolves_a_dependency_with_no_dependencies_of_its_own(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
         assert (await container.resolve(Db)).name == "db"
 
     async def test_injects_a_whole_graph_by_keyword(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
-        builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
-        builder.register(Handler).to(Handler, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
+        builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
+        builder.register(Handler).to(Handler, scope=Scope.TRANSIENT)
         container = builder.build()
 
         handler = await container.resolve(Handler)
@@ -34,14 +34,14 @@ class TestHappyPath:
     async def test_resolves_an_abstract_key_to_its_implementation(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
-        builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
+        builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert isinstance(await container.resolve(Repository), SqlRepository)
 
     async def test_resolves_a_protocol_key(self, builder: ContainerBuilder) -> None:
-        builder.register(Greeter).to(Hello, scope=Scope.Singleton)
+        builder.register(Greeter).to(Hello, scope=Scope.SINGLETON)
         container = builder.build()
 
         assert (await container.resolve(Greeter)).greet() == "hello"
@@ -71,7 +71,7 @@ class TestUnregistered:
     ) -> None:
         # Repository is bound but its Db dependency is not, so this is a wiring bug rather
         # than an absent optional feature.
-        builder.register(Repository).to(SqlRepository, scope=Scope.Transient)
+        builder.register(Repository).to(SqlRepository, scope=Scope.TRANSIENT)
         container = builder.build()
 
         with pytest.raises(UnregisteredDependencyError):
@@ -86,7 +86,7 @@ class TestSelfInjection:
             def __init__(self, container: Container) -> None:
                 self.container = container
 
-        builder.register(NeedsContainer).to(NeedsContainer, scope=Scope.Transient)
+        builder.register(NeedsContainer).to(NeedsContainer, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert (await container.resolve(NeedsContainer)).container is container
@@ -98,7 +98,7 @@ class TestSelfInjection:
             def __init__(self, container: Container) -> None:
                 self.container = container
 
-        builder.register(NeedsContainer).to(NeedsContainer, scope=Scope.Transient)
+        builder.register(NeedsContainer).to(NeedsContainer, scope=Scope.TRANSIENT)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -115,7 +115,7 @@ class TestOptionalDependencies:
             def __init__(self, db: Db | None) -> None:
                 self.db = db
 
-        builder.register(NeedsOptional).to(NeedsOptional, scope=Scope.Transient)
+        builder.register(NeedsOptional).to(NeedsOptional, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert (await container.resolve(NeedsOptional)).db is None
@@ -127,8 +127,8 @@ class TestOptionalDependencies:
             def __init__(self, db: Db | None) -> None:
                 self.db = db
 
-        builder.register(Db).to(Db, scope=Scope.Singleton)
-        builder.register(NeedsOptional).to(NeedsOptional, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
+        builder.register(NeedsOptional).to(NeedsOptional, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert isinstance((await container.resolve(NeedsOptional)).db, Db)
@@ -144,7 +144,7 @@ class TestConstructorDefaults:
             def __init__(self, db: Db = fallback) -> None:
                 self.db = db
 
-        builder.register(NeedsDefault).to(NeedsDefault, scope=Scope.Transient)
+        builder.register(NeedsDefault).to(NeedsDefault, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert (await container.resolve(NeedsDefault)).db is fallback
@@ -158,8 +158,8 @@ class TestConstructorDefaults:
             def __init__(self, db: Db = fallback) -> None:
                 self.db = db
 
-        builder.register(Db).to(Db, scope=Scope.Singleton)
-        builder.register(NeedsDefault).to(NeedsDefault, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
+        builder.register(NeedsDefault).to(NeedsDefault, scope=Scope.TRANSIENT)
         container = builder.build()
 
         assert (await container.resolve(NeedsDefault)).db is not fallback
@@ -172,7 +172,7 @@ class TestAsyncProviders:
             db.name = "opened"
             return db
 
-        builder.register(Db).to(open_db, scope=Scope.Singleton)
+        builder.register(Db).to(open_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         assert (await container.resolve(Db)).name == "opened"
@@ -183,8 +183,8 @@ class TestAsyncProviders:
         async def open_repository(db: Db) -> Repository:
             return SqlRepository(db)
 
-        builder.register(Db).to(Db, scope=Scope.Singleton)
-        builder.register(Repository).to(open_repository, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
+        builder.register(Repository).to(open_repository, scope=Scope.SINGLETON)
         container = builder.build()
 
         assert (await container.resolve(Repository)).find() == "row from db"
@@ -198,7 +198,7 @@ class TestAsyncProviders:
                 db.name = "called"
                 return db
 
-        builder.register(Db).to(OpenDb(), scope=Scope.Singleton)
+        builder.register(Db).to(OpenDb(), scope=Scope.SINGLETON)
         container = builder.build()
 
         assert (await container.resolve(Db)).name == "called"
@@ -211,7 +211,7 @@ class TestTryResolveInScopes:
         self, builder: ContainerBuilder
     ) -> None:
         # The success path: both existing try_resolve tests take the None or raising path.
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
 
         assert isinstance(await container.try_resolve(Db), Db)
@@ -219,7 +219,7 @@ class TestTryResolveInScopes:
     async def test_a_scoped_key_is_stable_within_one_scope(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -228,7 +228,7 @@ class TestTryResolveInScopes:
     async def test_a_scoped_key_differs_between_scopes(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as first, container.scope() as second:
@@ -237,7 +237,7 @@ class TestTryResolveInScopes:
     async def test_agrees_with_resolve_about_a_scoped_key(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -254,9 +254,9 @@ class TestOptionalDependenciesPerScope:
             def __init__(self, db: Db | None) -> None:
                 self.db = db
 
-        builder.register(Db).to(Db, scope=Scope.Scoped)
+        builder.register(Db).to(Db, scope=Scope.SCOPED)
         builder.register(NeedsOptionalScoped).to(
-            NeedsOptionalScoped, scope=Scope.Transient
+            NeedsOptionalScoped, scope=Scope.TRANSIENT
         )
         container = builder.build()
 
@@ -274,7 +274,7 @@ class TestOptionalDependenciesPerScope:
             def __init__(self, db: Db | None) -> None:
                 self.db = db
 
-        builder.register(NeedsOptional).to(NeedsOptional, scope=Scope.Transient)
+        builder.register(NeedsOptional).to(NeedsOptional, scope=Scope.TRANSIENT)
         container = builder.build()
 
         async with container.scope() as scope:

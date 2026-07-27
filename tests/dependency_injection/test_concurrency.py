@@ -46,7 +46,7 @@ class TestSingleInstanceUnderConcurrency:
             await asyncio.sleep(0)  # yield, so resolvers genuinely interleave
             return Db()
 
-        builder.register(Db).to(open_db, scope=Scope.Singleton)
+        builder.register(Db).to(open_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         results = await asyncio.gather(
@@ -71,7 +71,7 @@ class TestSingleInstanceUnderConcurrency:
                 self.dependency = dependency
 
         for cls in (Level3, Level2, Level1):
-            builder.register(cls).to(cls, scope=Scope.Singleton)
+            builder.register(cls).to(cls, scope=Scope.SINGLETON)
         container = builder.build()
 
         # A single lock around resolution would hang here; the timeout makes that a failure
@@ -92,7 +92,7 @@ class TestFailurePropagation:
             await asyncio.sleep(0)
             raise RuntimeError("factory failed")
 
-        builder.register(Db).to(open_db, scope=Scope.Singleton)
+        builder.register(Db).to(open_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         outcomes = await asyncio.gather(
@@ -114,7 +114,7 @@ class TestFailurePropagation:
                 raise RuntimeError("transient failure")
             return Db()
 
-        builder.register(Db).to(open_db, scope=Scope.Singleton)
+        builder.register(Db).to(open_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         with pytest.raises(RuntimeError):
@@ -134,7 +134,7 @@ class TestHotPathDoesNotSuspend:
     async def test_a_cached_singleton_resolves_without_suspending(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Singleton)
+        builder.register(Db).to(Db, scope=Scope.SINGLETON)
         container = builder.build()
         warmed = await container.resolve(Db)  # first resolve populates the cache
 
@@ -146,7 +146,7 @@ class TestHotPathDoesNotSuspend:
     async def test_a_transient_with_no_async_provider_resolves_without_suspending(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Db).to(Db, scope=Scope.Transient)
+        builder.register(Db).to(Db, scope=Scope.TRANSIENT)
         container = builder.build()
 
         resolved, suspended = drive_once(container.resolve(Db))
@@ -163,7 +163,7 @@ class TestCancellation:
             await asyncio.sleep(0.05)
             return Db()
 
-        builder.register(Db).to(open_db, scope=Scope.Singleton)
+        builder.register(Db).to(open_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         creator = asyncio.create_task(container.resolve(Db))
@@ -196,7 +196,7 @@ class TestScopesUnderConcurrency:
             await asyncio.sleep(0)
             return Session()
 
-        builder.register(Session).to(open_session, scope=Scope.Scoped)
+        builder.register(Session).to(open_session, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -220,7 +220,7 @@ class TestScopesUnderConcurrency:
             await asyncio.sleep(0)
             return Session()
 
-        builder.register(Session).to(open_session, scope=Scope.Scoped)
+        builder.register(Session).to(open_session, scope=Scope.SCOPED)
         container = builder.build()
 
         async def resolve_many(scope: object) -> list[Session]:
@@ -250,7 +250,7 @@ class TestScopesUnderConcurrency:
             await asyncio.sleep(0)
             return Db()
 
-        builder.register(Db).to(open_db, scope=Scope.Singleton)
+        builder.register(Db).to(open_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         async with container.scope() as first, container.scope() as second:
@@ -272,7 +272,7 @@ class TestScopesUnderConcurrency:
                 raise RuntimeError("scoped factory failed")
             return Session()
 
-        builder.register(Session).to(open_session, scope=Scope.Scoped)
+        builder.register(Session).to(open_session, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -288,7 +288,7 @@ class TestScopesUnderConcurrency:
     async def test_a_cached_scoped_instance_resolves_without_suspending(
         self, builder: ContainerBuilder
     ) -> None:
-        builder.register(Session).to(Session, scope=Scope.Scoped)
+        builder.register(Session).to(Session, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope:
@@ -308,8 +308,8 @@ class TestScopesUnderConcurrency:
             def __init__(self, inner: Inner) -> None:
                 self.inner = inner
 
-        builder.register(Inner).to(Inner, scope=Scope.Scoped)
-        builder.register(Outer).to(Outer, scope=Scope.Scoped)
+        builder.register(Inner).to(Inner, scope=Scope.SCOPED)
+        builder.register(Outer).to(Outer, scope=Scope.SCOPED)
         container = builder.build()
 
         async with container.scope() as scope, asyncio.timeout(5):
@@ -330,7 +330,7 @@ class TestClosingWhileAResolutionIsInFlight:
             await blocked.wait()
             return Db()
 
-        builder.register(Db).to(slow_db, scope=Scope.Singleton)
+        builder.register(Db).to(slow_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         resolving = asyncio.create_task(container.resolve(Db))
@@ -359,7 +359,7 @@ class TestClosingWhileAResolutionIsInFlight:
                 await blocked.wait()  # hangs until cancelled by the close
             return Session()
 
-        builder.register(Session).to(open_session, scope=Scope.Scoped)
+        builder.register(Session).to(open_session, scope=Scope.SCOPED)
         container = builder.build()
 
         scope = container.scope()
@@ -392,7 +392,7 @@ class TestClosingWhileAResolutionIsInFlight:
             await asyncio.sleep(0.05)
             return Db()
 
-        builder.register(Db).to(open_db, scope=Scope.Singleton)
+        builder.register(Db).to(open_db, scope=Scope.SINGLETON)
         container = builder.build()
 
         first = container.scope()

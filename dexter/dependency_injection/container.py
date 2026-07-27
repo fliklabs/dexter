@@ -43,8 +43,8 @@ from .models import (
 class Container:
     """Resolves dependencies from an immutable set of registrations.
 
-    The root container holds `Scope.Singleton` instances; each child scope holds its own
-    `Scope.Scoped` instances. `Scope.Transient` is never cached.
+    The root container holds `Scope.SINGLETON` instances; each child scope holds its own
+    `Scope.SCOPED` instances. `Scope.TRANSIENT` is never cached.
     """
 
     __slots__ = (
@@ -177,16 +177,16 @@ class Container:
                 key, chain.extend(ResolutionStep(key, parameter))
             )
 
-        if registration.scope is Scope.Transient:
+        if registration.scope is Scope.TRANSIENT:
             # Nothing to share, so no task and no cache entry: constructed inline.
             return await self._produce(registration, chain, parameter)
 
-        if registration.scope is Scope.Scoped and self._parent is None:
+        if registration.scope is Scope.SCOPED and self._parent is None:
             # `Scoped` means one instance per scoped container, and the root is not one.
             # Caching it here instead would silently make it a process-wide singleton.
             raise ScopeRequiredError(key, chain.extend(ResolutionStep(key, parameter)))
 
-        owner = self._root if registration.scope is Scope.Singleton else self
+        owner = self._root if registration.scope is Scope.SINGLETON else self
         return await owner._resolve_cached(registration, chain, parameter)
 
     async def _resolve_cached(
@@ -252,12 +252,12 @@ class Container:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
         for parameter in plan.parameters:
-            if parameter.kind is ParameterKind.Container:
+            if parameter.kind is ParameterKind.CONTAINER:
                 kwargs[parameter.name] = self
                 continue
 
             key = parameter.key
-            if parameter.kind is ParameterKind.Optional and key not in self._registry:
+            if parameter.kind is ParameterKind.OPTIONAL and key not in self._registry:
                 kwargs[parameter.name] = None
                 continue
 
