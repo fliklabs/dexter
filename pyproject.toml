@@ -10,7 +10,9 @@ requires-python = ">=3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version"]
-dependencies = []
+# pydantic>=2.12 is a hard floor, not a preference: earlier releases have no cp314
+# `pydantic-core` wheel and their sdist build fails on Python 3.14.
+dependencies = ["pydantic>=2.12"]
 classifiers = ["Typing :: Typed"]
 
 # `requires-python` above is the public compatibility floor and the ONLY hand-edited
@@ -27,14 +29,23 @@ path = "dexter/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["dexter"]
+# Module-scoped agent guidance is for contributors, not consumers.
+exclude = ["**/AGENTS.md"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/dexter", "/tests", "/README.md", "/LICENSE", "/pyproject.toml"]
+include = [
+    "/dexter",
+    "/tests",
+    "/examples",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
 
 [dependency-groups]
 dev = [{ include-group = "test" }, { include-group = "lint" }]
-test = ["pytest>=8.3"]
-lint = ["ruff>=0.9", "mypy>=1.14"]
+test = ["pytest>=8.3", "pytest-asyncio>=1.4"]
+lint = ["ruff>=0.9", "mypy>=2.3"]
 
 # ─────────────────────────────── ruff ────────────────────────────────
 [tool.ruff]
@@ -101,6 +112,9 @@ known-first-party = ["dexter"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "D", "PLR2004", "ARG"]
+# The reference app's whole purpose is to print a readable transcript. Docstring rules stay
+# on: an example is documentation, so it should be documented.
+"examples/**/*.py" = ["T20"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -112,7 +126,10 @@ docstring-code-format = true
 # check against a different Python version.
 strict = true
 warn_unreachable = true
-files = ["dexter", "tests"]
+# `examples` is checked at full strict, with no relaxing override: nothing executes the
+# reference app, so type checking is its only protection against drifting out of step with
+# the API — and if it passes under strict, consumers' code can too.
+files = ["dexter", "tests", "examples"]
 enable_error_code = ["redundant-expr", "possibly-undefined", "truthy-bool"]
 
 # ────────────────────────────── pytest ───────────────────────────────
@@ -123,3 +140,8 @@ pythonpath = ["."]
 addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config", "-ra"]
 xfail_strict = true
 filterwarnings = ["error"]
+# `async def` tests run without a per-test decorator. The fixture loop scope is set
+# explicitly because leaving it unset can emit a deprecation warning, and every warning
+# is fatal here.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

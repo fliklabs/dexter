@@ -9,7 +9,30 @@ import sys
 
 import dexter
 from dexter.commons import DexterError
-from dexter.dependency_injection import DependencyInjectionError
+from dexter.dependency_injection import (
+    Binder,
+    CaptiveDependencyError,
+    CircularDependencyError,
+    Container,
+    ContainerBuilder,
+    ContainerClosedError,
+    ContainerStateError,
+    DependencyInjectionError,
+    DuplicateRegistrationError,
+    IncompleteRegistrationError,
+    InvalidRegistrationError,
+    PositionalOnlyParameterError,
+    Registration,
+    RegistrationError,
+    ResolutionDepthExceededError,
+    ResolutionError,
+    Scope,
+    ScopeClosedError,
+    ScopeRequiredError,
+    UnregisteredDependencyError,
+    UnresolvableParameterError,
+    UnresolvedAnnotationError,
+)
 
 
 class TestTopLevelPackage:
@@ -41,3 +64,38 @@ class TestExceptionHierarchy:
 
     def test_dexter_error_is_an_exception(self) -> None:
         assert issubclass(DexterError, Exception)
+
+
+class TestDependencyInjectionSurface:
+    def test_the_wiring_and_resolution_types_are_exported(self) -> None:
+        assert {Binder, Container, ContainerBuilder, Registration, Scope}
+
+    def test_every_error_is_exported(self) -> None:
+        # Consumers cannot handle what they cannot import, so the whole tree is public.
+        errors = {
+            CaptiveDependencyError,
+            CircularDependencyError,
+            ContainerClosedError,
+            ContainerStateError,
+            DependencyInjectionError,
+            DuplicateRegistrationError,
+            IncompleteRegistrationError,
+            InvalidRegistrationError,
+            PositionalOnlyParameterError,
+            RegistrationError,
+            ResolutionDepthExceededError,
+            ResolutionError,
+            ScopeClosedError,
+            ScopeRequiredError,
+            UnregisteredDependencyError,
+            UnresolvableParameterError,
+            UnresolvedAnnotationError,
+        }
+        assert all(issubclass(error, DependencyInjectionError) for error in errors)
+
+    def test_the_scope_members_are_the_conventional_three(self) -> None:
+        assert [scope.value for scope in Scope] == ["Transient", "Singleton", "Scoped"]
+
+    def test_scope_values_match_their_member_names(self) -> None:
+        # The repo-wide enum convention; see AGENTS.md.
+        assert all(scope.value == scope.name for scope in Scope)

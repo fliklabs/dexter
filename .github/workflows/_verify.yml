@@ -37,7 +37,16 @@ jobs:
             echo "ERROR: tests/ leaked into the wheel" >&2
             exit 1
           fi
+          if grep -qE '(^|/)examples/' <<<"$contents"; then
+            echo "ERROR: examples/ leaked into the wheel" >&2
+            exit 1
+          fi
           if ! grep -q 'dexter/py.typed' <<<"$contents"; then
             echo "ERROR: dexter/py.typed missing from the wheel" >&2
             exit 1
           fi
+
+      # Not a test — it asserts nothing. It only proves the reference app still runs, which
+      # is the one kind of rot type checking cannot catch.
+      - name: Smoke-run the reference app
+        run: uv run python -m examples.taskflow

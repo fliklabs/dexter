@@ -15,7 +15,7 @@ framework. Read source files directly — there is no external documentation.
 | Module | Status | Purpose |
 | --- | --- | --- |
 | `dexter.commons` | Scaffolded | Shared primitives; root of the exception hierarchy |
-| `dexter.dependency_injection` | Scaffolded, no public API | DI container |
+| `dexter.dependency_injection` | Implemented | Async DI container, scopes, resolution |
 | `dexter.cqrs` | Planned | Commands, queries, events and their buses |
 | `dexter.application` | Planned | Application composition and wiring |
 | `dexter.caching` | Planned | Cache abstractions |
@@ -77,6 +77,39 @@ per-module markers are wrong.
   `type_utils.py`, `string_utils.py`.
 - Leading underscore (`_internal.py`) for module-private helpers that are not re-exported.
 
+## Enums
+
+**Every enum is a `StrEnum` with PascalCase members whose value equals the member name.**
+
+```python
+class Scope(StrEnum):
+    Transient = "Transient"
+    Singleton = "Singleton"
+    Scoped = "Scoped"
+```
+
+This gives readable error messages and f-strings with no `.value`, JSON serialisation with no
+encoder, and agreement between name lookup and value lookup.
+
+- **Never `auto()`.** In a `StrEnum` it lowercases the member name, so renaming a member
+  silently changes the serialised value.
+- **Value must equal the name.** Divergence makes the two lookup forms disagree and makes a
+  serialised value ambiguous about casing.
+
+## Data types: pydantic or slotted class
+
+Pydantic is a first-class citizen and replaces `@dataclass`, but not everywhere:
+
+| Use | For |
+| --- | --- |
+| `pydantic.BaseModel`, `frozen=True`, `extra="forbid"` | Types that cross from user input into dexter and are built once, where validation earns its cost |
+| Plain class with `__slots__`, or a tuple | Types dexter builds for itself on a hot path |
+
+The split is measured, not stylistic: a pydantic model costs ~298 ns to construct versus ~38 ns
+for a slotted class, and using one per resolution step made dependency resolution 63% slower.
+Keep every field of a frozen model hashable and immutable — a `list` field silently makes the
+model unhashable, and frozen is shallow.
+
 ## `dexter.commons`
 
 Two constraints beyond the normal rules:
@@ -109,25 +142,60 @@ re-exported name is covered by `tests/test_public_api.py`.
 
 ## Annotations
 
-**Read annotations with `typing.get_type_hints()`, never raw `__annotations__` or
-`inspect.signature(...).parameters[...].annotation`.**
+**Read annotations with `typing.get_type_hints(target, format=Format.FORWARDREF)`**, never raw
+`__annotations__` and never `inspect.signature(...).parameters[...].annotation`. `Format` comes
+from **`annotationlib`**, not `typing`.
 
 Raw annotations are plain strings whenever the defining module uses
-`from __future__ import annotations`, which silently breaks any runtime type
-introspection. `get_type_hints()` resolves them to real objects either way, so dexter
-imposes no restriction on how consumers write their own annotations.
+`from __future__ import annotations`, which silently breaks runtime type introspection.
+`get_type_hints` resolves them to real objects either way, so dexter imposes no restriction on
+how consumers write their own annotations. Prefer it over `inspect.get_annotations`, which
+returns a bare string rather than a `ForwardRef` for an unresolvable name and un-stringises only
+one level deep.
 
-Two traps if you introspect constructors:
+`Format.FORWARDREF` means an unresolvable annotation arrives as a `ForwardRef` you can turn into
+a precise error, instead of a `NameError` escaping from introspection.
 
-- The dict returned by `get_type_hints()` is **not** in signature order. Iterate
-  `inspect.signature(...).parameters` and look hints up by name; never zip the two.
-- A class with no `__init__` of its own reports `(self, /, *args, **kwargs)`. Check
-  `"__init__" in vars(cls)` before treating those parameters as dependencies.
+Traps when introspecting constructors, every one of them verified:
+
+- **`inspect.signature` needs `annotation_format=Format.FORWARDREF` too.** By default it
+  evaluates annotations eagerly and raises `NameError`, which defeats the point of reading
+  hints in forward-reference mode.
+- The dict from `get_type_hints` is **not** in signature order. Iterate
+  `inspect.signature(...).parameters` and look hints up **by name**; never zip the two.
+- **Do not test for a constructor with `"__init__" in vars(cls)`.** A subclass that inherits a
+  constructor with real dependencies reports `False`, so every inherited dependency is silently
+  dropped. Select the construction target like this:
+
+  ```python
+  if getattr(cls, "_is_protocol", False):        # a Protocol is not constructible
+  elif cls.__init__ is not object.__init__:      # introspect __init__
+  elif cls.__new__ is not object.__new__:        # NamedTuple and friends construct here
+  else:                                          # no dependencies
+  ```
+
+- `inspect.signature` raises `ValueError` for some builtins — catch it.
+- `get_type_hints` on a `functools.partial` silently returns `{}`. Take parameters from the
+  partial and hints from the unwrapped `.func`.
+- To detect an async provider, prefer awaiting the *result* when
+  `inspect.isawaitable(result)`: `inspect.iscoroutinefunction` misses a class with an async
+  `__call__` and a sync function returning an awaitable.
+- **`asyncio.iscoroutinefunction` is banned** — deprecated in 3.14, removed in 3.16, and its
+  `DeprecationWarning` is fatal under this project's warning filter. Use
+  `inspect.iscoroutinefunction`.
 
 ## Tooling
 
 `uv` for dependencies, `ruff` for formatting and linting, `mypy --strict` for types,
-`pytest` for tests. Configuration lives entirely in `pyproject.toml`.
+`pytest` with `pytest-asyncio` in auto mode for tests. Configuration lives entirely in
+`pyproject.toml`.
+
+**Runtime dependencies: `pydantic>=2.12` only.** The floor is hard — earlier releases have no
+cp314 `pydantic-core` wheel and fail to build on 3.14. Adding a second runtime dependency is a
+deliberate decision, not a convenience; consumers inherit everything declared here.
+
+**dexter is async-native.** No synchronous entry points, no async↔sync wrappers, and nothing in
+the library drives an event loop (`asyncio.run`, `run_until_complete`) on a caller's behalf.
 
 ```bash
 uv sync                       # create .venv, install dev dependencies
@@ -179,6 +247,28 @@ to prevent:
 | `TC` | Moves imports into `if TYPE_CHECKING:`; classes named in annotations that are resolved at runtime must stay importable at runtime |
 
 `ANN` is also omitted, as redundant with mypy strict's `disallow_untyped_defs`.
+
+## Examples
+
+Runnable reference applications live in `examples/` at the repo root — never inside `dexter/`,
+and never in the wheel (`packages = ["dexter"]` is a whitelist, so leakage is impossible). They
+are included in the sdist so a source download is self-documenting.
+
+**An example is a demonstration, not a test.** It asserts nothing and no test executes it;
+shaping it around a test runner would distort it into something nobody would copy. It is
+type-checked under **full** mypy strict and linted like everything else, which is its only
+protection against drifting out of step with the API — and evidence that a consumer's code can
+type-check too.
+
+- Every example directory needs an `__init__.py`, for the same mypy module-naming reason as
+  `tests/`.
+- Entry point is `python -m examples.<name>`. **Never a `[project.scripts]` console script** —
+  it would land in the wheel's `entry_points.txt` and install a command pointing at a module the
+  wheel does not contain.
+- `examples/**/*.py` ignores `T20` only: printing is the whole point. Docstring rules stay on,
+  because an example is documentation.
+- CI smoke-runs the app after the distribution check. That is not a test — it asserts nothing;
+  it catches the one kind of rot type checking cannot.
 
 ## Tests
 
