@@ -46,7 +46,9 @@ jobs:
             exit 1
           fi
 
-      # Not a test — it asserts nothing. It only proves the reference app still runs, which
+      # Not tests — they assert nothing. They only prove the reference apps still run, which
       # is the one kind of rot type checking cannot catch.
-      - name: Smoke-run the reference app
-        run: uv run python -m examples.taskflow
+      - name: Smoke-run the reference apps
+        run: |
+          uv run python -m examples.taskflow
+          uv run python -m examples.storefront

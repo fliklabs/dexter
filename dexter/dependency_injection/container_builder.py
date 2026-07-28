@@ -11,6 +11,8 @@ type. With the key pinned by `register` and the provider checked against the res
 from types import MappingProxyType
 from typing import Any
 
+from dexter.commons import describe_type
+
 from ._annotations import build_plan, is_async_provider, is_protocol
 from .container import Container
 from .errors import (
@@ -26,7 +28,6 @@ from .models import (
     Provider,
     Registration,
     Scope,
-    describe_key,
     describe_scope,
 )
 
@@ -53,12 +54,12 @@ class Binder[T]:
         """
         if not callable(provider):
             raise InvalidRegistrationError(
-                f"cannot bind {describe_key(self._key)} to {provider!r}, "
+                f"cannot bind {describe_type(self._key)} to {provider!r}, "
                 f"which is not callable."
             )
         if is_protocol(provider):
             raise InvalidRegistrationError(
-                f"cannot bind {describe_key(self._key)} to {describe_key(provider)}, "
+                f"cannot bind {describe_type(self._key)} to {describe_type(provider)}, "
                 f"which is a Protocol; bind a concrete implementation or a factory."
             )
         self._builder._add(
@@ -115,7 +116,7 @@ class ContainerBuilder:
             )
         if key in self._registry:
             raise DuplicateRegistrationError(
-                f"{describe_key(key)} is already registered."
+                f"{describe_type(key)} is already registered."
             )
         self._pending[key] = None
         return Binder(self, key)
@@ -133,7 +134,7 @@ class ContainerBuilder:
         registration = self._registry.get(key)
         if registration is None or not registration.has_instance:
             raise InvalidRegistrationError(
-                f"{describe_key(key)} is not registered as an instance."
+                f"{describe_type(key)} is not registered as an instance."
             )
         instance: T = registration.instance
         return instance
@@ -145,7 +146,7 @@ class ContainerBuilder:
         `CaptiveDependencyError` if a singleton would capture a scoped instance.
         """
         if self._pending:
-            names = ", ".join(sorted(describe_key(key) for key in self._pending))
+            names = ", ".join(sorted(describe_type(key) for key in self._pending))
             raise IncompleteRegistrationError(
                 f"registration was started but never completed for: {names}. "
                 f"Call .to(...) or .to_instance(...)."
@@ -171,10 +172,10 @@ class ContainerBuilder:
         for key, registration in self._registry.items():
             if registration.scope is not Scope.SINGLETON or registration.has_instance:
                 continue
-            path = self._find_scoped_dependency(key, (describe_key(key),), {key})
+            path = self._find_scoped_dependency(key, (describe_type(key),), {key})
             if path is not None:
                 raise CaptiveDependencyError(
-                    f"{describe_key(key)} is registered as {describe_scope(Scope.SINGLETON)} "
+                    f"{describe_type(key)} is registered as {describe_scope(Scope.SINGLETON)} "
                     f"but depends on {path[-1]}, which is {describe_scope(Scope.SCOPED)}. A "
                     f"singleton outlives every scope, so it would capture one scope's instance "
                     f"and share it with all the others. Register the dependent as "
@@ -198,7 +199,7 @@ class ContainerBuilder:
             dependency = self._registry.get(parameter.key)
             if dependency is None:
                 continue  # Unregistered; resolution will report it far more clearly.
-            step = f"{describe_key(parameter.key)} (parameter {parameter.name!r})"
+            step = f"{describe_type(parameter.key)} (parameter {parameter.name!r})"
             if dependency.scope is Scope.SCOPED:
                 return (*path, step)
             if parameter.key in seen:

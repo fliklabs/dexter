@@ -21,6 +21,8 @@ from typing import (
     get_type_hints,
 )
 
+from dexter.commons import describe_type
+
 from .errors import (
     InvalidRegistrationError,
     PositionalOnlyParameterError,
@@ -32,7 +34,6 @@ from .models import (
     ParameterKind,
     PlannedParameter,
     ResolutionChain,
-    describe_key,
 )
 
 _REJECTED_KINDS = frozenset(
@@ -131,7 +132,7 @@ def _type_hints(target: object, provider: object) -> dict[str, Any]:
         )
     except (NameError, TypeError, AttributeError) as error:
         raise InvalidRegistrationError(
-            f"could not read annotations for {describe_key(provider)}: {error}"
+            f"could not read annotations for {describe_type(provider)}: {error}"
         ) from error
     hints.pop("return", None)
     return hints
@@ -152,7 +153,7 @@ def _signature(target: Callable[..., Any], provider: object) -> inspect.Signatur
         return inspect.signature(target, annotation_format=Format.FORWARDREF)
     except (ValueError, TypeError, NameError) as error:
         raise InvalidRegistrationError(
-            f"cannot inspect the signature of {describe_key(provider)}: {error}"
+            f"cannot inspect the signature of {describe_type(provider)}: {error}"
         ) from error
 
 
@@ -191,7 +192,7 @@ def build_plan(provider: object, container_type: type[Any]) -> DependencyPlan:
     if target is None:
         if is_protocol(provider):
             raise InvalidRegistrationError(
-                f"{describe_key(provider)} is a Protocol and cannot be constructed; "
+                f"{describe_type(provider)} is a Protocol and cannot be constructed; "
                 f"bind a concrete implementation or a factory instead."
             )
         return DependencyPlan(parameters=())
@@ -209,13 +210,13 @@ def build_plan(provider: object, container_type: type[Any]) -> DependencyPlan:
             continue
         if parameter.kind in _REJECTED_KINDS:
             raise UnresolvableParameterError(
-                f"{describe_key(provider)} takes {parameter.name!r} as "
+                f"{describe_type(provider)} takes {parameter.name!r} as "
                 f"*args/**kwargs, which cannot be injected.",
                 ResolutionChain(),
             )
         if parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
             raise PositionalOnlyParameterError(
-                f"{describe_key(provider)} takes {parameter.name!r} as a "
+                f"{describe_type(provider)} takes {parameter.name!r} as a "
                 f"positional-only parameter; dependencies are passed by keyword.",
                 ResolutionChain(),
             )
@@ -227,7 +228,7 @@ def build_plan(provider: object, container_type: type[Any]) -> DependencyPlan:
                 # Nothing to resolve and a value already exists: leave it to the default.
                 continue
             raise UnresolvableParameterError(
-                f"{describe_key(provider)} takes {parameter.name!r} with no annotation, "
+                f"{describe_type(provider)} takes {parameter.name!r} with no annotation, "
                 f"so it cannot be resolved.",
                 ResolutionChain(),
             )
@@ -235,7 +236,7 @@ def build_plan(provider: object, container_type: type[Any]) -> DependencyPlan:
         hint = _strip_annotated(hint)
         if isinstance(hint, ForwardRef):
             raise UnresolvedAnnotationError(
-                f"{describe_key(provider)} annotates {parameter.name!r} as "
+                f"{describe_type(provider)} annotates {parameter.name!r} as "
                 f"{hint.__forward_arg__!r}, which does not exist at runtime.",
                 ResolutionChain(),
             )

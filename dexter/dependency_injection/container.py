@@ -19,6 +19,8 @@ import inspect
 from types import MappingProxyType, TracebackType
 from typing import Any, Never, Self
 
+from dexter.commons import describe_type
+
 from .errors import (
     CircularDependencyError,
     ContainerClosedError,
@@ -36,7 +38,6 @@ from .models import (
     ResolutionChain,
     ResolutionStep,
     Scope,
-    describe_key,
 )
 
 
@@ -203,7 +204,7 @@ class Container:
             # single event loop this is atomic and the map itself is the mutual exclusion.
             task = asyncio.create_task(
                 self._produce(registration, chain, parameter),
-                name=f"dexter.resolve:{describe_key(key)}",
+                name=f"dexter.resolve:{describe_type(key)}",
             )
             self._in_flight[key] = task
             task.add_done_callback(lambda done: self._settle(key, done))
@@ -241,7 +242,7 @@ class Container:
             if callable(closer):
                 closer()
             raise InvalidRegistrationError(
-                f"{describe_key(provider)} is registered as a synchronous provider but "
+                f"{describe_type(provider)} is registered as a synchronous provider but "
                 f"returned an awaitable. Declare it with `async def`, or mark it with "
                 f"`inspect.markcoroutinefunction`."
             )

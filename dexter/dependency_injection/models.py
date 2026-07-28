@@ -16,6 +16,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from dexter.commons import describe_type
+
 type Key[T] = type[T] | Callable[..., T]
 """What a dependency is looked up by.
 
@@ -131,17 +133,6 @@ def describe_scope(scope: Scope) -> str:
     return f"Scope.{scope.name}"
 
 
-def describe_key(key: object) -> str:
-    """Render a key as a readable name, dropping uninformative module prefixes."""
-    module = getattr(key, "__module__", None)
-    name = getattr(key, "__qualname__", None) or getattr(key, "__name__", None)
-    if name is None:
-        return repr(key)
-    if module in (None, "builtins", "__main__"):
-        return str(name)
-    return f"{module}.{name}"
-
-
 class ResolutionChain:
     """The path taken to reach the dependency currently being resolved.
 
@@ -189,5 +180,5 @@ class ResolutionChain:
             suffix = (
                 "" if step.parameter is None else f" (parameter {step.parameter!r})"
             )
-            lines.append(f"{indent}{arrow}{describe_key(step.key)}{suffix}")
+            lines.append(f"{indent}{arrow}{describe_type(step.key)}{suffix}")
         return "\n".join(lines)

@@ -20,6 +20,7 @@ drives an event loop on your behalf.
 | --- | --- |
 | `dexter.commons` | Scaffolded — shared primitives |
 | `dexter.dependency_injection` | Implemented — container, scopes, async resolution |
+| `dexter.cqrs` | Implemented — commands, queries, events, buses, middleware |
 
 ## Install
 
@@ -120,6 +121,97 @@ Collapsing that into one call would mean widening the key so abstract types are
 accepted, and that widening makes mypy infer the type variable as `object` — silently
 accepting the wrong provider. Two calls buys the check.
 
+## CQRS
+
+Commands change state, queries read it, events announce that something happened. Each is a
+frozen pydantic model; the type parameter says what a handler produces.
+
+```python
+from dexter.cqrs import Command, CommandBus, Event, Query, use_cqrs
+
+
+class PlaceOrder(Command[OrderId]):
+    sku: str
+    quantity: int
+
+
+class OrderPlaced(Event):
+    order_id: str
+
+
+class PlaceOrderHandler:
+    def __init__(self, orders: OrderBook, events: EventBus) -> None:
+        self.orders, self.events = orders, events
+
+    async def handle(self, command: PlaceOrder) -> OrderId:
+        order_id = await self.orders.place(command.sku, command.quantity)
+        self.events.publish(OrderPlaced(order_id=order_id.value))
+        return order_id
+```
+
+A handler inherits nothing from dexter: it is a class with one async `handle`, whose
+dependencies arrive the same way any other class's do. Wire it with the module's `use.py`:
+
+```python
+builder = ContainerBuilder()
+use_cqrs(builder)
+register_command_handler(builder, PlaceOrder, PlaceOrderHandler, scope=Scope.TRANSIENT)
+register_event_handler(builder, OrderPlaced, ReserveStock, scope=Scope.TRANSIENT)
+container = builder.build()
+
+async with container.scope() as scope:
+    commands = await scope.resolve(CommandBus)
+    order_id = await commands.dispatch(PlaceOrder(sku="DX-100", quantity=2)).result()
+```
+
+**Sending hands back a ticket.** `dispatch` and `publish` return immediately with an id you
+can log or correlate, and `await ticket.result()` redeems the outcome whenever you want it —
+typed by the message, so `order_id` above is an `OrderId` and not `Any`. Never redeeming a
+ticket is a valid choice: the work still runs, and `await bus.drain()` reports anything that
+failed unobserved. Queries are the exception and are answered inline, since a read has nothing
+worth deferring.
+
+| Message | Handlers | Sending it |
+| --- | --- | --- |
+| `Command[TResult]` | Exactly one | `bus.dispatch(command) -> Dispatch[TResult]` |
+| `Query[TResult]` | Exactly one | `await bus.ask(query) -> TResult` |
+| `Event` | Any number, concurrent | `bus.publish(event) -> EventDispatch` |
+
+Identity lives on an envelope built when the message is sent, never on the message itself — so
+two equal commands are equal, and dispatching one twice yields two distinguishable dispatches
+carrying `id`, `correlation_id` and `causation_id`.
+
+An event's handlers all run, whatever the others do; every failure arrives together as
+`EventHandlingError`, an `ExceptionGroup` you can split with `except*`. Publishing an event
+nobody handles is not an error, and the ticket's `handler_count` says so.
+
+Middleware wraps every dispatch on every bus, in registration order, outermost first:
+
+```python
+class Tracing:
+    async def handle(self, envelope: Envelope[Any], call_next: Next) -> Any:
+        return await call_next(envelope)
+
+
+register_middleware(builder, Tracing, scope=Scope.SCOPED)
+```
+
+**Buses are `Scope.SCOPED`, always.** A bus resolves handlers from the container it holds, so a
+singleton one would capture the root and bypass the scope it was asked for; resolving a bus
+outside a scope raises `ScopeRequiredError`. A handler registered for the wrong message is a
+type error, and one whose return type disagrees with its message is rejected when it is
+registered, long before anything dispatches.
+
+### See it working
+
+```bash
+uv run python -m examples.storefront
+```
+
+An order service that places orders, fans an event out to two reactions, correlates what a
+handler publishes with the command that caused it, dispatches without redeeming, and shows what
+an aggregated failure reports. See [examples/README.md](./examples/README.md).
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/). Python is installed and pinned by uv —
@@ -129,7 +221,7 @@ you do not need a system Python.
 uv sync                                    # create .venv and install dev dependencies
 ./verify.sh --fix                          # format, lint, type-check, test
 ./verify.sh                                # same, without writing changes
-uv run pytest tests/dependency_injection   # run one module's tests
+uv run pytest tests/cqrs                   # run one module's tests
 ```
 
 A change is not finished until `./verify.sh` exits 0.

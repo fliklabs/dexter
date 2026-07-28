@@ -16,7 +16,7 @@ framework. Read source files directly — there is no external documentation.
 | --- | --- | --- |
 | `dexter.commons` | Scaffolded | Shared primitives; root of the exception hierarchy |
 | `dexter.dependency_injection` | Implemented | Async DI container, scopes, resolution |
-| `dexter.cqrs` | Planned | Commands, queries, events and their buses |
+| `dexter.cqrs` | Implemented | Commands, queries, events and their buses |
 | `dexter.application` | Planned | Application composition and wiring |
 | `dexter.caching` | Planned | Cache abstractions |
 | `dexter.observability` | Planned | Tracing and instrumentation |
@@ -66,6 +66,28 @@ Every module uses the same well-known filenames so navigation is uniform:
 
 `py.typed` lives **only** at `dexter/py.typed`. PEP 561 applies recursively, so
 per-module markers are wrong.
+
+## Wiring: what `use.py` contains
+
+A module that registers anything into a container exposes exactly two shapes, and the
+difference between them is the point. `dexter/cqrs/use.py` is the worked example.
+
+| Shape | For | Rules |
+| --- | --- | --- |
+| `use_<module>(builder) -> None` | What the **module** provides | No configuration arguments — it is a topology switch, not a settings object. An alternative topology is a second `use_*` function, never a flag |
+| `register_<thing>(builder, ..., *, scope) -> None` | What the **application** contributes | Called many times. `scope=` is required, for the same reason `Binder.to` requires it |
+
+- **`use_*` runs before every `register_*`.** The registries a `register_*` writes into are
+  created by `use_*`. The wrong order must raise a module error naming the missing call, not
+  the container's own "not registered as an instance".
+- **Neither returns the builder.** `ContainerBuilder` is not a chaining API — `register`
+  returns a `Binder` and `build` returns a `Container` — so returning it would invent a second
+  style.
+- **Register into the module's own registry before binding in the container**, so a malformed
+  registration is reported by the module's precise error rather than by whichever container
+  guard trips first.
+- Anything a `register_*` must populate while wiring is bound with `to_instance` and fetched
+  back with `ContainerBuilder.resolve_instance`, which exists for exactly this.
 
 ## Naming
 
@@ -141,9 +163,9 @@ Two constraints beyond the normal rules:
    a commons package rots. A one-consumer helper stays in the module that uses it until a
    second consumer appears.
 
-Rule 2 is currently applied to itself: `commons` holds only `errors.py`, because that is
-the only thing with a real second consumer. Files like `types.py` or `type_utils.py` get
-created when something actually needs them — not in advance.
+Rule 2 is what put `type_utils.py` there: `describe_type` renders a class as the name a reader
+has to find in their own wiring, and it stayed inside the dependency injection module until
+`dexter.cqrs` needed the same rendering. Nothing else is added in advance.
 
 ## Public API must be re-exported explicitly
 

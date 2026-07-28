@@ -6,3 +6,4 @@ see AGENTS.md.
 """
 
 from .errors import DexterError as DexterError
+from .type_utils import describe_type as describe_type

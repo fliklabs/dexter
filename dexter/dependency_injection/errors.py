@@ -5,9 +5,9 @@ Resolution failures carry the path taken to reach them. `args` stays the short m
 rendered chain.
 """
 
-from dexter.commons import DexterError
+from dexter.commons import DexterError, describe_type
 
-from .models import ResolutionChain, Scope, describe_key, describe_scope
+from .models import ResolutionChain, Scope, describe_scope
 
 
 class DependencyInjectionError(DexterError):
@@ -103,7 +103,7 @@ class UnregisteredDependencyError(ResolutionError):
     def __init__(self, key: object, chain: ResolutionChain) -> None:
         """Name the unregistered key and record how it was reached."""
         super().__init__(
-            f"{describe_key(key)} is not registered in this container.", chain
+            f"{describe_type(key)} is not registered in this container.", chain
         )
         self.key = key
 
@@ -121,7 +121,7 @@ class ScopeRequiredError(ResolutionError):
     def __init__(self, key: object, chain: ResolutionChain) -> None:
         """Name the scoped key that was asked for outside any scope."""
         super().__init__(
-            f"{describe_key(key)} is registered as {describe_scope(Scope.SCOPED)} and can "
+            f"{describe_type(key)} is registered as {describe_scope(Scope.SCOPED)} and can "
             f"only be resolved inside a scope; this container is the root. "
             f"Use `async with container.scope() as scope:` and resolve from the scope.",
             chain,
@@ -135,7 +135,7 @@ class CircularDependencyError(ResolutionError):
     def __init__(self, key: object, chain: ResolutionChain) -> None:
         """Name the key that closes the cycle and record the path that revealed it."""
         super().__init__(
-            f"circular dependency detected: {describe_key(key)} depends on itself.",
+            f"circular dependency detected: {describe_type(key)} depends on itself.",
             chain,
         )
         self.key = key
@@ -152,7 +152,7 @@ class ResolutionDepthExceededError(ResolutionError):
         """Name the key being resolved when the depth ceiling was hit."""
         super().__init__(
             f"resolution exceeded {ResolutionChain.MAX_DEPTH} levels while resolving "
-            f"{describe_key(key)}; the dependency graph is probably cyclic.",
+            f"{describe_type(key)}; the dependency graph is probably cyclic.",
             chain,
         )
         self.key = key
