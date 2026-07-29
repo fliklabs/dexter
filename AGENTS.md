@@ -20,6 +20,7 @@ framework. Read source files directly — there is no external documentation.
 | `dexter.cli` | Implemented | A keyboard-navigable CLI. Ships no commands — consumers register their own |
 | `dexter.api` | Implemented | Typed request handlers, exposed over HTTP. `dexter.api.http` is the only part that knows a web framework exists |
 | `dexter.application` | Implemented | Composing an application from modules. The only module that depends on two others, which is its job |
+| `dexter.tools` | Implemented | Development-time tooling that ships. **Not framework** — see `dexter/tools/AGENTS.md` for why it is allowed to be here |
 | `dexter.caching` | Planned | Cache abstractions |
 | `dexter.observability` | Planned | Tracing and instrumentation |
 
@@ -235,7 +236,7 @@ Traps when introspecting constructors, every one of them verified:
 `pytest` with `pytest-asyncio` in auto mode for tests. Configuration lives entirely in
 `pyproject.toml`.
 
-**Runtime dependencies: `pydantic>=2.12`, `click>=8.3`, `rich>=14`, `fastapi>=0.115`.** Every
+**Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi`.** Every
 one was a deliberate decision, because consumers inherit everything declared here — and a
 module they never import still lands in their install. Adding a fifth is the same decision
 again, not a convenience.
@@ -246,6 +247,11 @@ again, not a convenience.
 | `click` | `dexter.cli`'s command tree, parsing and help | Nothing older is typed well enough for strict mode |
 | `rich` | `dexter.cli`'s output | — |
 | `fastapi` | `dexter.api`'s routing, validation and schema generation | Pydantic models as query parameters arrived in 0.115.0, and a route whose path names no parameter binds its whole request model that way |
+
+The declared floors themselves live in `pyproject.toml` and are not repeated here: `./upgrade.sh`
+raises them, and a number written in two places is a number that will eventually disagree. What
+this table records is *why* each dependency is present and what the original hard constraint was
+— reasons that outlive any particular version.
 
 `fastapi` is the one that costs a consumer something they may not want: it brings `starlette`,
 `anyio`, `sniffio` and three smaller packages into an install that only wanted the container.
@@ -288,9 +294,14 @@ Three decisions in it are worth knowing:
 
 It does not touch `.python-version` — that pin is the separate decision described above.
 
-**The floor table below is prose, and an upgrade does not rewrite it.** After a runtime floor
-moves, read it: the "why" column names specific versions, and those reasons do not
-automatically survive the number changing.
+**The floor table below records reasons, not current numbers**, so an upgrade cannot make it
+stale. The "why" column names the version a constraint originally came from; that is history and
+stays true. The live floors are in `pyproject.toml`.
+
+`dexter.tools.pins` is the half of this that ships, so another repository can raise its own
+floors with `python -m dexter.tools.pins floors --write` without copying any Python. The
+orchestration stays here, because what "verify" means differs per project — copy `upgrade.sh`
+and point its `gate` at whatever yours is.
 
 ### The Python version is written once
 

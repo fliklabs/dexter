@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import dexter
+import dexter.tools
 from dexter.api import (
     ApiError,
     ApiHandler,
@@ -168,6 +169,15 @@ from dexter.dependency_injection import (
     UnresolvableParameterError,
     UnresolvedAnnotationError,
 )
+from dexter.tools.pins import (
+    Change,
+    declared,
+    locked,
+    moved,
+    raise_floors,
+    raised,
+    rewrite,
+)
 
 
 class TestTopLevelPackage:
@@ -248,6 +258,76 @@ class TestCommonsSurface:
     def test_the_shared_group_error_is_exported(self) -> None:
         assert issubclass(DexterGroupError, DexterError)
         assert issubclass(DexterGroupError, ExceptionGroup)
+
+
+class TestToolsSurface:
+    """The one part of dexter that is tooling rather than framework."""
+
+    def test_the_pin_helpers_are_importable(self) -> None:
+        assert {Change, locked, declared, raised, rewrite, moved, raise_floors}
+
+    def test_the_package_does_not_import_its_own_runnable_submodule(self) -> None:
+        """Otherwise `python -m dexter.tools.pins` executes `pins` twice.
+
+        `runpy` warns on every invocation when it does, and that warning is an error for any
+        consumer running pytest with `filterwarnings = ["error"]` — as this repository does.
+        `json` and `json.tool` are the stdlib precedent for the shape.
+
+        Checked in a subprocess because importing the submodule anywhere binds it onto the
+        parent package, so in-process there is nothing left to observe.
+        """
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, dexter.tools; print('dexter.tools.pins' in sys.modules)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "False", (
+            "dexter/tools/__init__.py imports .pins, which makes `-m` run it twice"
+        )
+
+    def test_running_it_as_a_module_is_warning_free(self) -> None:
+        """The shipped command-line interface, run the way a consumer's script runs it."""
+        result = subprocess.run(
+            [sys.executable, "-W", "error", "-m", "dexter.tools.pins"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert "usage" in result.stdout
+        assert not result.stderr
+
+    def test_it_is_not_wired_into_a_container(self) -> None:
+        """Nothing here is a service, so there is no `use_tools` to call."""
+        assert not [name for name in dir(dexter.tools) if name.startswith("use_")]
+
+    def test_it_costs_a_consumer_no_dependency(self) -> None:
+        """It ships in the wheel, so it may only ever import the standard library.
+
+        This is the entire justification for a development-time tool living in a runtime
+        package. The moment it needs a third party, it belongs outside `dexter/` instead.
+        """
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, dexter.tools; "
+                "print(sorted({m.split('.')[0] for m in sys.modules "
+                "if not m.startswith(('_', 'dexter')) and '.' not in m}))",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for third_party in ("click", "rich", "pydantic", "fastapi"):
+            assert third_party not in result.stdout, (
+                f"dexter.tools imported {third_party}; it must stay standard library only"
+            )
 
 
 class TestCqrsSurface:

@@ -49,6 +49,7 @@ include = [
     "/tools",
     "/dx",
     "/verify.sh",
+    "/upgrade.sh",
     "/README.md",
     "/LICENSE",
     "/pyproject.toml",
@@ -141,6 +142,11 @@ known-first-party = ["dexter"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "D", "PLR2004", "ARG"]
+# The one place inside `dexter/` that writes to a terminal, because it is a command-line tool
+# rather than framework — `python -m dexter.tools.pins` is its interface. Treat this line as a
+# boundary marker: if any *other* module under `dexter/` ever needs T20, it is printing from
+# library code and that is the bug. See dexter/tools/AGENTS.md.
+"dexter/tools/**/*.py" = ["T20"]
 # The reference app's whole purpose is to print a readable transcript. Docstring rules stay
 # on: an example is documentation, so it should be documented.
 "examples/**/*.py" = ["T20"]

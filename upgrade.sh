@@ -104,15 +104,16 @@ uv lock --upgrade
 
 echo ""
 echo "--- what moved ---"
-uv run --quiet python -m tools.pins changes "$BACKUP/uv.lock" uv.lock
+uv run --quiet python -m dexter.tools.pins changes "$BACKUP/uv.lock" uv.lock
 
 if [ "$LOCK_ONLY" -eq 0 ]; then
     echo ""
     echo "--- raising the declared floors to match ---"
     # Floors are raised from the lock rather than from an index, so a floor can only ever be a
     # version that has already been shown to resolve. They stay `>=`: dexter is a library, and
-    # the exact set belongs in uv.lock. See tools/pins.py.
-    uv run --quiet python -m tools.pins floors --write
+    # the exact set belongs in uv.lock. See dexter/tools/pins.py — which ships, so another
+    # repository can run this same step against its own manifest without copying any Python.
+    uv run --quiet python -m dexter.tools.pins floors --write
     # pyproject.toml has changed, so the lock's record of it is stale. This re-locks without
     # `--upgrade`, which keeps the versions just resolved and only refreshes the metadata.
     uv lock

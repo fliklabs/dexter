@@ -1,21 +1,22 @@
 """Reading resolved versions out of a lock file and writing them back as floors.
 
-`tools/` is otherwise untested — it is this repository's own CLI, and running it is the test.
-This file is the exception because `pins` **rewrites `pyproject.toml`**, and a rewrite that gets
-it subtly wrong damages the one file every other tool reads. The failure would not be a broken
-command; it would be a manifest that no longer says what it meant.
+`dexter.tools.pins` **rewrites a project's `pyproject.toml`**, and it ships — so a bug here
+damages the one file every other tool reads, in someone else's repository. That is why a
+development-time helper is tested as closely as anything that runs in a request.
 """
 
 from pathlib import Path
 
 import pytest
 
-from tools.pins import (
+from dexter.tools.pins import (
     Change,
     declared,
     locked,
+    main,
     moved,
     normalise,
+    raise_floors,
     raised,
     rewrite,
 )
@@ -182,3 +183,124 @@ class TestComparingLocks:
 
     def test_a_removed_package_is_not_an_upgrade(self) -> None:
         assert moved({"six": "1.16.0"}, {}) == []
+
+
+class TestAgainstAProject:
+    """The whole point of shipping this: it works on a project that is not dexter's own.
+
+    `__file__` would resolve to the consumer's `site-packages` once installed, so a path taken
+    from it would rewrite nothing, or the wrong thing. Every path is the caller's.
+    """
+
+    @pytest.fixture
+    def project(self, tmp_path: Path) -> Path:
+        (tmp_path / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
+        (tmp_path / "uv.lock").write_text(LOCK, encoding="utf-8")
+        return tmp_path
+
+    def test_it_reads_the_project_it_is_given(self, project: Path) -> None:
+        changes, _ = raise_floors(project)
+
+        assert [change.name for change in changes] == ["click", "rich", "pytest-cov"]
+
+    def test_reporting_does_not_write(self, project: Path) -> None:
+        raise_floors(project)
+
+        assert (project / "pyproject.toml").read_text(encoding="utf-8") == PYPROJECT
+
+    def test_writing_writes(self, project: Path) -> None:
+        raise_floors(project, write=True)
+
+        assert '"click>=8.4.2"' in (project / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+
+    def test_it_does_not_touch_the_lock(self, project: Path) -> None:
+        """Raising a floor is a claim about what is acceptable, not a re-resolution."""
+        raise_floors(project, write=True)
+
+        assert (project / "uv.lock").read_text(encoding="utf-8") == LOCK
+
+
+class TestCommandLine:
+    @pytest.fixture
+    def project(self, tmp_path: Path) -> Path:
+        (tmp_path / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
+        (tmp_path / "uv.lock").write_text(LOCK, encoding="utf-8")
+        return tmp_path
+
+    def test_floors_reports(
+        self, project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["floors", str(project)]) == 0
+        assert "click" in capsys.readouterr().out
+
+    def test_floors_writes_only_when_asked(self, project: Path) -> None:
+        main(["floors", str(project)])
+        assert (project / "pyproject.toml").read_text(encoding="utf-8") == PYPROJECT
+
+        main(["floors", "--write", str(project)])
+        assert (project / "pyproject.toml").read_text(encoding="utf-8") != PYPROJECT
+
+    def test_floors_defaults_to_the_working_directory(
+        self,
+        project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(project)
+
+        assert main(["floors"]) == 0
+        assert "click" in capsys.readouterr().out
+
+    def test_a_project_already_current_says_so(
+        self, project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        main(["floors", "--write", str(project)])
+        capsys.readouterr()
+
+        main(["floors", str(project)])
+
+        assert "already the resolved version" in capsys.readouterr().out
+
+    def test_changes_reports_what_moved(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        old = tmp_path / "old.lock"
+        old.write_text(LOCK.replace('version = "8.4.2"', 'version = "8.3.0"'), "utf-8")
+        new = tmp_path / "new.lock"
+        new.write_text(LOCK, encoding="utf-8")
+
+        assert main(["changes", str(old), str(new)]) == 0
+        output = capsys.readouterr().out
+        assert "8.3.0" in output
+        assert "1 package(s) changed" in output
+
+    def test_changes_between_identical_locks(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        lock = tmp_path / "uv.lock"
+        lock.write_text(LOCK, encoding="utf-8")
+
+        main(["changes", str(lock), str(lock)])
+
+        assert "nothing moved" in capsys.readouterr().out
+
+    def test_a_requirement_it_will_not_touch_is_named(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\ndependencies = ["uvicorn[standard]>=0.34"]', encoding="utf-8"
+        )
+        (tmp_path / "uv.lock").write_text(LOCK, encoding="utf-8")
+
+        main(["floors", str(tmp_path)])
+
+        assert "left alone" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("argv", [[], ["nonsense"], ["changes", "only-one"]])
+    def test_anything_else_is_usage(
+        self, argv: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(argv) == 2
+        assert "usage" in capsys.readouterr().out
