@@ -34,6 +34,7 @@ from dexter.dependency_injection import (
     Scope,
 )
 
+from .bus import BusGroup
 from .command_bus import CommandBus, InProcessCommandBus
 from .errors import CqrsNotWiredError
 from .event_bus import EventBus, InProcessEventBus
@@ -63,12 +64,22 @@ def use_cqrs(builder: ContainerBuilder) -> None:
     the container it was given, so its lifetime decides which container those handlers come
     from; as a singleton it would capture the root and resolve every handler there, bypassing
     the scope it was asked for. Resolve a bus from inside `container.scope()`.
+
+    Leaving the scope settles every bus in it, because `BusGroup` is bound with
+    `dispose=BusGroup.settle`. Without that, a dispatch whose task had not yet resolved its
+    handler would find the scope closed underneath it — a failure that depends on scheduling,
+    and so shows up under load rather than in tests.
     """
     builder.register(CommandRegistry).to_instance(CommandRegistry())
     builder.register(QueryRegistry).to_instance(QueryRegistry())
     builder.register(EventRegistry).to_instance(EventRegistry())
     builder.register(MiddlewarePipeline).to_instance(MiddlewarePipeline())
 
+    # One `dispose` for all three, not one each. Draining a bus creates work on the others,
+    # so they have to settle together rather than in reverse creation order; `BusGroup` says
+    # why at length. Each bus takes the group and adds itself, so the group exists whenever
+    # any bus does.
+    builder.register(BusGroup).to(BusGroup, scope=Scope.SCOPED, dispose=BusGroup.settle)
     builder.register(CommandBus).to(InProcessCommandBus, scope=Scope.SCOPED)
     builder.register(QueryBus).to(InProcessQueryBus, scope=Scope.SCOPED)
     builder.register(EventBus).to(InProcessEventBus, scope=Scope.SCOPED)

@@ -23,6 +23,7 @@ Sending a command or publishing an event hands back a ticket: its id exists imme
 which case the work still runs and any failure surfaces from `bus.drain()`.
 """
 
+from .bus import BusGroup as BusGroup
 from .bus import MessageBus as MessageBus
 from .command_bus import CommandBus as CommandBus
 from .command_bus import InProcessCommandBus as InProcessCommandBus

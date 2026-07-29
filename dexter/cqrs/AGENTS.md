@@ -13,7 +13,7 @@ the decisions that are not visible in it.
 | `registry.py` | The three registries — which handler handles which message |
 | `dispatch.py` | `Dispatch` / `EventDispatch` — the ticket |
 | `pipeline.py` | `MiddlewarePipeline` — ordered composition around a dispatch |
-| `bus.py` | `MessageBus` — outstanding work, draining, closing |
+| `bus.py` | `MessageBus` — outstanding work, draining, closing — and `BusGroup` |
 | `command_bus.py`, `query_bus.py`, `event_bus.py` | One abstract key and its in-process implementation each |
 | `use.py` | `use_cqrs` and the `register_*` functions |
 
@@ -89,12 +89,30 @@ A ticket is held until `drain()` or `aclose()`, never released when its task fin
 failure that completed unobserved is precisely what `drain()` exists to report. A bus is
 scoped, so what it holds is bounded by one scope.
 
-## Draining is the application's job, for now
+## The buses settle together, and the container does it
 
-`Container.aclose()` "calls nothing on resolved instances", so a scope cannot drain its buses.
-Until DI disposal lands, the application drains before leaving the scope — `examples/storefront`
-shows the shape. **When disposal arrives, `drain()` should be what the container calls**, and
-the manual calls in the example and its README go away.
+`use_cqrs` binds `BusGroup` with `dispose=BusGroup.settle`, so leaving a scope waits for every
+dispatch started in it. This is not tidiness: a dispatch resolves its handler *from the scope*,
+so a task that had not got that far yet finds the scope closed underneath it. The failure
+depends on whether the task was scheduled before the scope exited, which means it passes tests
+and fails under load.
+
+**Why a group rather than a `dispose=` on each bus.** Reverse creation order is right for
+releasing a resource, because releasing only ever removes work. Draining *creates* work on the
+other buses. A command handler publishing an event is the central CQRS pattern, and the event
+bus is constructed inside that handler — so it finishes construction after the command bus, and
+reverse order drains it first, while it is still empty. Draining the command bus next then
+publishes into a bus that has already been settled, and the reaction escapes the scope. That
+bug was real and is pinned by
+`tests/cqrs/test_settling.py::test_waits_for_an_event_published_by_a_command_handler`.
+
+So the group drains every bus in rounds until all of them are quiet, then closes them. Each bus
+takes the group and adds itself, which is what guarantees the group exists whenever any bus
+does. `drain()` loops for the same reason, one bus deep: a handler may dispatch again.
+
+**Leaving a scope therefore blocks until its dispatches finish**, exactly like
+`asyncio.TaskGroup`. A handler that never completes hangs scope exit — which is the honest
+outcome, since the alternative is silently discarding the work.
 
 ## Middleware wraps a dispatch, not a handler
 

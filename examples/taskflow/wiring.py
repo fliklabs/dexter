@@ -21,6 +21,7 @@ from .services import (
     JobHandler,
     RequestContext,
     SystemClock,
+    UnitOfWork,
     open_pool,
 )
 
@@ -45,8 +46,19 @@ def build_container(
     builder.register(Settings).to_instance(settings or DEFAULT_SETTINGS)
 
     # Singleton: one per container graph, shared by every scope. Opened by an async factory,
-    # because `__init__` cannot await.
-    builder.register(ConnectionPool).to(open_pool, scope=Scope.SINGLETON)
+    # because `__init__` cannot await, and closed by `dispose=` when the container closes.
+    # The callback is explicit: dexter never guesses that a method named `aclose` is the one
+    # that releases a type.
+    builder.register(ConnectionPool).to(
+        open_pool, scope=Scope.SINGLETON, dispose=ConnectionPool.aclose
+    )
+
+    # Scoped with a `dispose=`, which is the pairing disposal exists for: one per scope, and
+    # leaving the scope releases it. Released before the pool it depends on, because disposal
+    # runs in reverse creation order.
+    builder.register(UnitOfWork).to(
+        UnitOfWork, scope=Scope.SCOPED, dispose=UnitOfWork.aclose
+    )
 
     # A protocol key bound to a concrete class, with no suppression needed at the call site.
     builder.register(Clock).to(SystemClock, scope=Scope.SINGLETON)

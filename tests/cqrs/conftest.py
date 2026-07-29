@@ -14,8 +14,10 @@ import pytest
 
 from dexter.cqrs import (
     Command,
+    CommandBus,
     Envelope,
     Event,
+    EventBus,
     Next,
     Query,
     use_cqrs,
@@ -63,6 +65,16 @@ class Block(Command[int]):
     pass
 
 
+class Chain(Command[None]):
+    """A command whose handler dispatches another command on the same bus."""
+
+
+class Cascade(Command[None]):
+    """A command whose handler publishes an event, which is the central CQRS pattern."""
+
+    pass
+
+
 class GetUser(Query[str]):
     user_id: int
 
@@ -105,6 +117,36 @@ class BlockHandler:
         await self.gate.wait()
         self.ledger.record("unblocked")
         return 99
+
+
+class ChainHandler:
+    """Dispatches again from inside a handler, so draining has to loop."""
+
+    def __init__(self, commands: CommandBus, ledger: Ledger) -> None:
+        self.commands = commands
+        self.ledger = ledger
+
+    async def handle(self, command: Chain) -> None:
+        await asyncio.sleep(0)
+        self.ledger.record("outer ran")
+        self.commands.dispatch(CreateUser(email="chained@x.y"))
+
+
+class CascadeHandler:
+    """Publishes an event from inside a command handler.
+
+    The event bus is therefore constructed *during* this handler, which is what makes
+    settling the buses in creation order wrong — see `BusGroup`.
+    """
+
+    def __init__(self, events: EventBus, ledger: Ledger) -> None:
+        self.events = events
+        self.ledger = ledger
+
+    async def handle(self, command: Cascade) -> None:
+        await asyncio.sleep(0)
+        self.ledger.record("command ran")
+        self.events.publish(UserCreated(user_id=1))
 
 
 class GetUserHandler:

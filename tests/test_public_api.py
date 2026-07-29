@@ -8,9 +8,10 @@ import subprocess
 import sys
 
 import dexter
-from dexter.commons import DexterError, describe_type
+from dexter.commons import DexterError, DexterGroupError, describe_type
 from dexter.cqrs import (
     BusClosedError,
+    BusGroup,
     Command,
     CommandBus,
     CommandHandler,
@@ -71,6 +72,8 @@ from dexter.dependency_injection import (
     ContainerClosedError,
     ContainerStateError,
     DependencyInjectionError,
+    DisposalError,
+    Dispose,
     DuplicateRegistrationError,
     IncompleteRegistrationError,
     InvalidRegistrationError,
@@ -146,6 +149,11 @@ class TestDependencyInjectionSurface:
         }
         assert all(issubclass(error, DependencyInjectionError) for error in errors)
 
+    def test_disposal_is_exported(self) -> None:
+        assert issubclass(DisposalError, DependencyInjectionError)
+        assert issubclass(DisposalError, ExceptionGroup)
+        assert Dispose is not None
+
     def test_the_scope_members_are_the_conventional_three(self) -> None:
         assert [scope.value for scope in Scope] == ["TRANSIENT", "SINGLETON", "SCOPED"]
 
@@ -157,6 +165,10 @@ class TestDependencyInjectionSurface:
 class TestCommonsSurface:
     def test_the_shared_type_renderer_is_exported(self) -> None:
         assert describe_type(DexterError) == "dexter.commons.errors.DexterError"
+
+    def test_the_shared_group_error_is_exported(self) -> None:
+        assert issubclass(DexterGroupError, DexterError)
+        assert issubclass(DexterGroupError, ExceptionGroup)
 
 
 class TestCqrsSurface:
@@ -182,6 +194,10 @@ class TestCqrsSurface:
 
     def test_the_registries_and_pipeline_are_exported(self) -> None:
         assert {CommandRegistry, QueryRegistry, EventRegistry, MiddlewarePipeline}
+
+    def test_the_bus_group_is_exported(self) -> None:
+        # Applications binding their own bus implementation need it in the constructor.
+        assert hasattr(BusGroup, "settle")
 
     def test_every_error_is_exported(self) -> None:
         errors = {

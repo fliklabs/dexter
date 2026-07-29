@@ -16,6 +16,7 @@ from .services import (
     JobDispatcher,
     JobHandler,
     RequestContext,
+    UnitOfWork,
 )
 from .wiring import build_container
 
@@ -108,6 +109,21 @@ async def show_self_injection(container: Container) -> None:
     note("This is why the dispatcher is Scoped: a Singleton would capture the root.")
 
 
+async def show_disposal(container: Container) -> None:
+    """Show a scoped instance released when its scope ends, and a singleton that is not."""
+    heading("disposal: releasing what the container created")
+    async with container.scope() as scope:
+        unit = await scope.resolve(UnitOfWork)
+        pool = await scope.resolve(ConnectionPool)
+        line(f"inside the scope  {tag(unit)} closed={unit.is_closed}")
+        line(f"                  {tag(pool)} open={pool.is_open}")
+
+    line(f"after the scope   {tag(unit)} closed={unit.is_closed}")
+    line(f"                  {tag(pool)} open={pool.is_open}")
+    note("The scope released its own instance and left the root's singleton alone.")
+    note("The pool is closed by `container.aclose()` — see the last line of the run.")
+
+
 async def show_optional_dependency() -> None:
     """Wire the same application with and without a notifier."""
     heading("optional dependency: Notifier | None")
@@ -160,13 +176,16 @@ async def main() -> None:
         await show_self_injection(container)
         await show_try_resolve(container)
         await show_resolution_failure(container)
+        await show_disposal(container)
+        pool = await container.resolve(ConnectionPool)
     finally:
         await container.aclose()
 
     await show_optional_dependency()
 
     heading("shutdown")
-    line("container closed")
+    line(f"container closed  {tag(pool)} open={pool.is_open}")
+    note("`dispose=ConnectionPool.aclose` ran when the root container closed.")
     print()
 
 

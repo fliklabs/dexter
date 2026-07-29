@@ -7,28 +7,18 @@ asserts anything — read the output and judge it.
 import asyncio
 
 from dexter.cqrs import (
+    BusGroup,
     CommandBus,
-    DispatchFailedError,
     EventBus,
     QueryBus,
     UnhandledCommandError,
 )
-from dexter.dependency_injection import Container, ScopeRequiredError
+from dexter.dependency_injection import Container, DisposalError, ScopeRequiredError
 
 from .display import heading, line, note, short
 from .domain import CancelOrder, GetOrder, OrderPlaced, PlaceOrder
 from .services import Warehouse
 from .wiring import build_container
-
-
-async def drain(scope: Container) -> None:
-    """Wait for every bus in `scope` before leaving it.
-
-    Until the container disposes what it resolved, this is the application's job — and it has
-    to happen before the scope exits, or a handler would still be resolving from a closed one.
-    """
-    for key in (CommandBus, EventBus, QueryBus):
-        await (await scope.resolve(key)).drain()
 
 
 async def show_a_command_and_its_ticket(container: Container) -> None:
@@ -44,7 +34,6 @@ async def show_a_command_and_its_ticket(container: Container) -> None:
         order_id = await ticket.result()
         line(f"redeemed              -> {order_id.value}")
 
-        await drain(scope)
         note("`order_id` is an OrderId, not Any — PlaceOrder is a Command[OrderId].")
         note("-> and <- lines are the Tracing middleware, wrapping every dispatch.")
 
@@ -54,19 +43,17 @@ async def show_events_fanning_out(container: Container) -> None:
     heading("one event, two reactions, running concurrently")
     async with container.scope() as scope:
         commands = await scope.resolve(CommandBus)
-        events = await scope.resolve(EventBus)
 
         ticket = commands.dispatch(PlaceOrder(sku="DX-200", quantity=1))
         await ticket.result()
-        await events.drain()
 
+        # The event the handler published is still in flight here; leaving the scope waits
+        # for it, so the reservations below are read after that.
         warehouse = await scope.resolve(Warehouse)
         line(f"warehouse reserved    -> {warehouse.reserved[-1]}")
         line(f"customer emailed      -> {ticket.envelope.message.sku}")
         note("PlaceOrderHandler published OrderPlaced; neither reaction is privileged.")
         note("Both ran before the single <- OrderPlaced line, concurrently.")
-
-        await drain(scope)
 
 
 async def show_correlation(container: Container) -> None:
@@ -94,8 +81,6 @@ async def show_correlation(container: Container) -> None:
         )
         note("Same correlation id, different message ids: one causal chain.")
 
-        await drain(scope)
-
 
 async def show_a_query(container: Container) -> None:
     """Read something back. A query is answered inline, with no ticket."""
@@ -117,8 +102,6 @@ async def show_a_query(container: Container) -> None:
         line(f"after cancelling      -> {cancelled.status}")
         note("`ask` returns the value; a read has nothing worth deferring.")
 
-        await drain(scope)
-
 
 async def show_deferred_dispatch(container: Container) -> None:
     """Dispatch several commands without redeeming any of them."""
@@ -135,11 +118,32 @@ async def show_deferred_dispatch(container: Container) -> None:
         for message_id in ids:
             line(f"dispatched, not redeemed  -> {short(message_id)}")
 
-        await drain(scope)
+    added = len(warehouse.reserved) - before
+    line(f"reserved after leaving    -> {added} more")
+    note("None of them was redeemed, and leaving the scope waited for all three.")
 
-        added = len(warehouse.reserved) - before
-        line(f"reserved after draining   -> {added} more")
-        note("`drain()` waits for work nobody is holding a ticket for.")
+
+async def show_settling(container: Container) -> None:
+    """Leave a scope with work still running, and show that it waited."""
+    heading("leaving a scope settles its buses")
+    warehouse = await container.resolve(Warehouse)
+    before = len(warehouse.reserved)
+
+    async with container.scope() as scope:
+        commands = await scope.resolve(CommandBus)
+        group = await scope.resolve(BusGroup)
+
+        ticket = commands.dispatch(PlaceOrder(sku="DX-700", quantity=4))
+        line(f"inside the scope   pending={group.pending}  ticket done={ticket.done()}")
+
+    line(f"after the scope    pending={group.pending}  ticket done={ticket.done()}")
+    line(f"reservations added -> {len(warehouse.reserved) - before}")
+    note(
+        "Nobody called drain(). `use_cqrs` binds BusGroup with dispose=BusGroup.settle,"
+    )
+    note("so the container settles every bus in the scope on the way out.")
+    note("The command ran *and* the event it published reached both reactions —")
+    note("the event bus is built inside that handler, so the two settle together.")
 
 
 async def show_failure_reporting() -> None:
@@ -147,26 +151,22 @@ async def show_failure_reporting() -> None:
     heading("when a reaction fails")
     container = build_container(with_failing_reaction=True)
     try:
-        async with container.scope() as scope:
-            commands = await scope.resolve(CommandBus)
-            events = await scope.resolve(EventBus)
+        warehouse = await container.resolve(Warehouse)
+        try:
+            async with container.scope() as scope:
+                commands = await scope.resolve(CommandBus)
+                await commands.dispatch(PlaceOrder(sku="DX-600", quantity=9)).result()
+            # Leaving the scope settles its buses, so an unredeemed failure is reported here
+            # rather than being silently discarded.
+        except DisposalError as error:
+            line(f"leaving the scope raised -> {error.args[0]}")
+            for failure in error.exceptions:
+                for inner in getattr(failure, "exceptions", (failure,)):
+                    line(f"  {type(inner).__name__}: {inner}")
 
-            await commands.dispatch(PlaceOrder(sku="DX-600", quantity=9)).result()
-
-            try:
-                await events.drain()
-            except DispatchFailedError as error:
-                line(f"drain reported        -> {error.args[0]}")
-                for failure in error.exceptions:
-                    for inner in getattr(failure, "exceptions", (failure,)):
-                        line(f"  {type(inner).__name__}: {inner}")
-
-            warehouse = await scope.resolve(Warehouse)
-            line(f"the others still ran  -> {warehouse.reserved}")
-            note("Failures arrive together; one broken reaction silences nothing.")
-
-            await commands.drain()
-            await (await scope.resolve(QueryBus)).drain()
+        line(f"the others still ran     -> {warehouse.reserved}")
+        note("Failures arrive together; one broken reaction silences nothing.")
+        note("Nobody called drain(): the container did, on the way out.")
     finally:
         await container.aclose()
 
@@ -209,6 +209,7 @@ async def main() -> None:
         await show_correlation(container)
         await show_a_query(container)
         await show_deferred_dispatch(container)
+        await show_settling(container)
         await show_what_goes_wrong(container)
     finally:
         await container.aclose()

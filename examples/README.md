@@ -12,8 +12,8 @@ They are not shipped in the wheel, so nothing here affects what a consumer insta
 
 | Example | Shows |
 | --- | --- |
-| [`taskflow/`](./taskflow) | A simulated async job service: all three scopes, async factories, optional dependencies, self-injection, and what a resolution failure reports |
-| [`storefront/`](./storefront) | A CQRS order service: typed commands, queries and events, tickets, correlation, middleware, deferred dispatch, and aggregated failures |
+| [`taskflow/`](./taskflow) | A simulated async job service: all three scopes, async factories, disposal, optional dependencies, self-injection, and what a resolution failure reports |
+| [`storefront/`](./storefront) | A CQRS order service: typed commands, queries and events, tickets, correlation, middleware, deferred dispatch, scope settling, and aggregated failures |
 
 ## taskflow
 
@@ -63,12 +63,29 @@ is resolving, so a dependency resolved inside a scope sees that scope), an optio
 a deliberate resolution failure so you can see that an error names the *path* to the missing
 dependency rather than just the dependency.
 
+### Disposal
+
+Two bindings carry a `dispose=`, and the section near the end of the run shows the difference
+between them:
+
+```
+disposal: releasing what the container created
+  inside the scope  UnitOfWork#15 closed=False
+                    ConnectionPool#1 open=True
+  after the scope   UnitOfWork#15 closed=True
+                    ConnectionPool#1 open=True
+```
+
+`UnitOfWork` is `Scope.SCOPED`, so the scope that built it releases it on the way out.
+`ConnectionPool` is `Scope.SINGLETON` and belongs to the root, so the scope leaves it alone —
+it closes when `container.aclose()` runs, which the last line of the transcript shows.
+
+Both callbacks are named explicitly at the binding. dexter never guesses that a method called
+`aclose` is the one that releases a type, because that guess is wrong as often as it is right.
+
 ### Deliberately not shown
 
-Disposal and lazy resolution, because dexter does not have them yet. `container.aclose()` is
-called at the end and releases the container's own state, but it does not yet call anything on
-resolved instances — so the pool in this example is never closed. That lands in a later change,
-along with `Lazy[T]`.
+Lazy resolution, because `Lazy[T]` does not exist yet.
 
 ### One thing in here that a real program should not copy
 
@@ -126,11 +143,27 @@ dispatched and never redeemed, and two mistakes — resolving a bus outside a sc
 dispatching a command nothing handles — so you can see what each reports.
 
 The last section binds a third reaction that always fails. The other two still run, and the
-failure arrives from `drain()` as a group rather than as a lone first exception.
+failure arrives as a group when the scope is left, rather than as a lone first exception.
 
-### One thing here that a real program will stop needing
+### Nobody drains anything
 
-Every section calls `drain(scope)` before leaving its scope. That is the application doing what
-the container cannot do yet: `container.aclose()` does not call anything on the instances it
-resolved, so nothing tells a bus that its scope is ending. When disposal lands in
-`dexter.dependency_injection`, draining becomes the container's job and these calls go away.
+```
+leaving a scope settles its buses
+  inside the scope   pending=1  ticket done=False
+  -> PlaceOrder   019fab9b…81f8
+  <- PlaceOrder   019fab9b…81f8
+  -> OrderPlaced  019fab9b…d864
+  <- OrderPlaced  019fab9b…d864
+  after the scope    pending=0  ticket done=True
+  reservations added -> 1
+```
+
+A command is dispatched and the ticket dropped. Inside the scope nothing has run; by the time
+the `async with` has closed, the command has run, the event it published has reached both
+reactions, and the ticket is done.
+
+No section here calls `drain()`. `use_cqrs` binds the scope's `BusGroup` with
+`dispose=BusGroup.settle`, so leaving a scope waits for every dispatch started in it and
+reports whatever failed unredeemed — which is why the last section can catch a `DisposalError`
+from the `async with` itself. The three fire-and-forget dispatches in the deferred section
+complete for the same reason.

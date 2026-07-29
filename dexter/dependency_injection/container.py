@@ -16,6 +16,7 @@ loops or threads is unsupported.
 
 import asyncio
 import inspect
+from collections.abc import Callable
 from types import MappingProxyType, TracebackType
 from typing import Any, Never, Self
 
@@ -24,6 +25,7 @@ from dexter.commons import describe_type
 from .errors import (
     CircularDependencyError,
     ContainerClosedError,
+    DisposalError,
     InvalidRegistrationError,
     ResolutionDepthExceededError,
     ScopeClosedError,
@@ -51,6 +53,8 @@ class Container:
     __slots__ = (
         "_cache",
         "_closed",
+        "_closing",
+        "_created",
         "_in_flight",
         "_parent",
         "_plans",
@@ -67,7 +71,9 @@ class Container:
     _root: Container
     _cache: dict[Any, Any]
     _in_flight: dict[Any, asyncio.Task[Any]]
+    _created: list[tuple[Callable[[Any], Any], Any]]
     _closed: bool
+    _closing: bool
 
     def __init__(
         self,
@@ -82,7 +88,9 @@ class Container:
         self._root = self if parent is None else parent._root
         self._cache: dict[Any, Any] = {}
         self._in_flight: dict[Any, asyncio.Task[Any]] = {}
+        self._created: list[tuple[Callable[[Any], Any], Any]] = []
         self._closed = False
+        self._closing = False
 
     # ── public API ───────────────────────────────────────────────────
 
@@ -126,12 +134,53 @@ class Container:
         return Container(self._registry, self._plans, parent=self)
 
     async def aclose(self) -> None:
-        """Close this container or scope. Idempotent."""
-        if self._closed:
+        """Close this container or scope, releasing what it created. Idempotent.
+
+        Every instance with a `dispose=` is released in reverse creation order, so a
+        dependency is never released before whatever depends on it. Failures do not stop the
+        rest: they are collected and raised together as `DisposalError`, and the container is
+        closed either way.
+
+        **Disposal runs before the container starts refusing.** A `dispose` callback is the
+        last chance to finish work that resolves from this container — a bus draining its
+        in-flight dispatches, say — and closing first would make exactly that impossible.
+        """
+        if self._closed or self._closing:
             return
-        self._closed = True
-        await self._cancel_in_flight()
-        self._cache.clear()
+        self._closing = True
+        try:
+            failures = await self._dispose_created()
+        finally:
+            self._closed = True
+            await self._cancel_in_flight()
+            self._cache.clear()
+            self._created.clear()
+
+        if failures:
+            raise DisposalError(
+                f"{len(failures)} dispose callback"
+                f"{'' if len(failures) == 1 else 's'} failed while closing.",
+                failures,
+            )
+
+    async def _dispose_created(self) -> tuple[Exception, ...]:
+        """Release every tracked instance, newest first, and return what failed.
+
+        Reverse order is dependency order run backwards. An instance is tracked when its
+        construction *completes*, and a dependency completes before the thing that needed it,
+        so walking the list backwards releases dependents before their dependencies.
+        """
+        failures: list[Exception] = []
+        for dispose, instance in reversed(self._created):
+            try:
+                result = dispose(instance)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as error:
+                # Collected rather than raised: one instance refusing to release must not
+                # leave every instance after it un-released.
+                failures.append(error)
+        return tuple(failures)
 
     async def __aenter__(self) -> Self:
         """Enter the scope, returning it."""
@@ -217,7 +266,13 @@ class Container:
         if task.cancelled():
             return
         if task.exception() is None:
-            self._cache[key] = task.result()
+            instance = task.result()
+            self._cache[key] = instance
+            dispose = self._registry[key].dispose
+            if dispose is not None:
+                # Recorded on completion, which is dependency order: whatever this instance
+                # needed finished being built before it did.
+                self._created.append((dispose, instance))
         # Calling `exception()` marks a failure as retrieved, so an abandoned one does not
         # log "Task exception was never retrieved". Nothing is cached on failure, so a later
         # resolve retries instead of replaying it.

@@ -24,6 +24,68 @@ from .dispatch import Dispatch
 from .errors import BusClosedError, DispatchFailedError
 
 
+class BusGroup:
+    """Every bus in one scope, settled as one.
+
+    This exists because draining is not like other teardown. Releasing a resource only ever
+    *removes* work, so releasing in reverse creation order is enough — but draining a bus
+    **creates** work on the other buses. A command handler that publishes an event is the
+    central CQRS pattern, and the event bus is constructed *inside* that handler, so it
+    finishes construction after the command bus and reverse order would drain it first, while
+    it is still empty. Draining the command bus next then publishes into a bus that has
+    already been settled, and the reaction escapes the scope entirely.
+
+    So the buses settle together, in rounds, until every one of them is quiet. Only then are
+    they closed.
+    """
+
+    __slots__ = ("_buses",)
+
+    def __init__(self) -> None:
+        """Start with no buses; each one registers itself when it is constructed."""
+        self._buses: list[MessageBus] = []
+
+    def include(self, bus: MessageBus, /) -> None:
+        """Take responsibility for settling `bus`."""
+        self._buses.append(bus)
+
+    @property
+    def pending(self) -> int:
+        """How many dispatches across every bus in this scope have not finished."""
+        return sum(bus.pending for bus in self._buses)
+
+    async def settle(self) -> None:
+        """Drain every bus until they are all quiet, then close them.
+
+        Registered as the group's `dispose=`, so leaving a scope does this. Rounds continue
+        while anything is still pending, because each round can produce work for a bus that
+        has already been drained this round.
+
+        Raises `DispatchFailedError` gathering every unredeemed failure from every bus. The
+        buses are closed either way.
+        """
+        failures: list[Exception] = []
+        try:
+            while True:
+                for bus in self._buses:
+                    try:
+                        await bus.drain()
+                    except DispatchFailedError as error:
+                        failures.extend(error.exceptions)
+                if not self.pending:
+                    break
+        finally:
+            for bus in self._buses:
+                await bus.aclose()
+
+        if failures:
+            raise DispatchFailedError(
+                f"{len(failures)} dispatch"
+                f"{'' if len(failures) == 1 else 'es'} failed and were never redeemed.",
+                tuple(failures),
+            )
+
+
 class MessageBus(ABC):
     """Common lifecycle for every bus: outstanding work, draining, and closing."""
 
@@ -39,29 +101,37 @@ class MessageBus(ABC):
     def name(self) -> str:
         """What this bus carries, for error messages: `command`, `query` or `event`."""
 
+    @property
+    def pending(self) -> int:
+        """How many of this bus's dispatches have not finished."""
+        return sum(1 for ticket in self._outstanding if not ticket.task.done())
+
     async def drain(self) -> None:
         """Wait for everything this bus started, then report what failed unobserved.
+
+        Loops rather than waiting once, because a handler may dispatch again: waiting on a
+        single snapshot would return while the work that work started was still running.
 
         Raises `DispatchFailedError` — an `ExceptionGroup` — if any ticket failed and was
         never redeemed. Draining twice is safe: the second call has nothing left to wait for.
         """
-        outstanding = tuple(self._outstanding)
+        while pending := tuple(
+            ticket for ticket in self._outstanding if not ticket.task.done()
+        ):
+            await asyncio.gather(
+                *(ticket.task for ticket in pending), return_exceptions=True
+            )
+
+        settled = tuple(self._outstanding)
         self._outstanding.clear()
-        if not outstanding:
-            return
-
-        await asyncio.gather(
-            *(ticket.task for ticket in outstanding), return_exceptions=True
-        )
-
         failures = tuple(
             failure
-            for ticket in outstanding
+            for ticket in settled
             if (failure := ticket.unobserved_failure()) is not None
         )
         if failures:
             raise DispatchFailedError(
-                f"{len(failures)} of {len(outstanding)} {self.name} dispatches failed "
+                f"{len(failures)} of {len(settled)} {self.name} dispatches failed "
                 f"and were never redeemed.",
                 failures,
             )

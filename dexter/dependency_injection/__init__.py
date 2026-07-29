@@ -22,6 +22,7 @@ from .errors import CircularDependencyError as CircularDependencyError
 from .errors import ContainerClosedError as ContainerClosedError
 from .errors import ContainerStateError as ContainerStateError
 from .errors import DependencyInjectionError as DependencyInjectionError
+from .errors import DisposalError as DisposalError
 from .errors import DuplicateRegistrationError as DuplicateRegistrationError
 from .errors import IncompleteRegistrationError as IncompleteRegistrationError
 from .errors import InvalidRegistrationError as InvalidRegistrationError
@@ -34,6 +35,7 @@ from .errors import ScopeRequiredError as ScopeRequiredError
 from .errors import UnregisteredDependencyError as UnregisteredDependencyError
 from .errors import UnresolvableParameterError as UnresolvableParameterError
 from .errors import UnresolvedAnnotationError as UnresolvedAnnotationError
+from .models import Dispose as Dispose
 from .models import Key as Key
 from .models import Provider as Provider
 from .models import Registration as Registration

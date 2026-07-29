@@ -21,7 +21,7 @@ from typing import Any
 from dexter.commons import describe_type
 from dexter.dependency_injection import Container
 
-from .bus import MessageBus
+from .bus import BusGroup, MessageBus
 from .dispatch import Dispatch
 from .models import Command, Envelope
 from .pipeline import MiddlewarePipeline
@@ -74,9 +74,12 @@ class InProcessCommandBus(CommandBus):
         container: Container,
         registry: CommandRegistry,
         pipeline: MiddlewarePipeline,
+        group: BusGroup,
     ) -> None:
         """Take the resolving container, the command registry, and the shared pipeline."""
         super().__init__()
+        # The group settles every bus in this scope together; see `BusGroup`.
+        group.include(self)
         self._container = container
         self._registry = registry
         self._pipeline = pipeline

@@ -23,6 +23,7 @@ from .errors import (
 )
 from .models import (
     DependencyPlan,
+    Dispose,
     Key,
     ParameterKind,
     Provider,
@@ -46,11 +47,23 @@ class Binder[T]:
         self._builder = builder
         self._key = key
 
-    def to(self, provider: Provider[T], /, *, scope: Scope) -> None:
+    def to(
+        self,
+        provider: Provider[T],
+        /,
+        *,
+        scope: Scope,
+        dispose: Dispose[T] | None = None,
+    ) -> None:
         """Bind the key to a class, a factory, or an async factory.
 
         `scope` is required: lifetime is the most consequential property of a binding and
         should never be chosen by omission.
+
+        `dispose` is called with the instance when the container that created it closes,
+        in reverse creation order. It is deliberately explicit rather than inferred from a
+        method the instance happens to have: `aclose` does not mean the same thing on every
+        type, and guessing would call the wrong one on the first type that disagrees.
         """
         if not callable(provider):
             raise InvalidRegistrationError(
@@ -62,20 +75,49 @@ class Binder[T]:
                 f"cannot bind {describe_type(self._key)} to {describe_type(provider)}, "
                 f"which is a Protocol; bind a concrete implementation or a factory."
             )
+        if dispose is not None:
+            self._check_disposable(dispose, scope)
         self._builder._add(
             Registration(
                 key=self._key,
                 provider=provider,
                 scope=scope,
                 is_async=is_async_provider(provider),
+                dispose=dispose,
             ),
             plan=build_plan(provider, Container),
         )
 
+    def _check_disposable(self, dispose: Dispose[T], scope: Scope) -> None:
+        """Reject a `dispose` the container could never honour.
+
+        A container releases what it created and still owns. A `Scope.TRANSIENT` binding is
+        neither: a new instance is handed out on every resolution and none is kept, so
+        tracking them all to dispose later is how a container turns into a memory leak.
+        Accepting `dispose` there and silently never calling it would be worse — the caller
+        would believe their resource was being released.
+        """
+        if not callable(dispose):
+            raise InvalidRegistrationError(
+                f"cannot dispose {describe_type(self._key)} with {dispose!r}, "
+                f"which is not callable."
+            )
+        if scope is Scope.TRANSIENT:
+            raise InvalidRegistrationError(
+                f"{describe_type(self._key)} is registered as "
+                f"{describe_scope(Scope.TRANSIENT)} and cannot be disposed: the container "
+                f"hands out a new instance every resolution and keeps none, so there is "
+                f"nothing for it to release. Register it as "
+                f"{describe_scope(Scope.SCOPED)} or {describe_scope(Scope.SINGLETON)}, or "
+                f"let whoever resolves it close it."
+            )
+
     def to_instance(self, instance: T, /) -> None:
         """Bind the key to an already-constructed value.
 
-        No scope is taken: an existing instance is inherently a single instance.
+        No scope is taken: an existing instance is inherently a single instance. There is no
+        `dispose` either — the container releases what it created, and it did not create this.
+        You are holding the instance already, so you are better placed to close it.
         """
         self._builder._add(
             Registration(

@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from dexter.dependency_injection import Container
 
-from .bus import MessageBus
+from .bus import BusGroup, MessageBus
 from .models import Envelope, Query
 from .pipeline import MiddlewarePipeline
 from .registry import QueryRegistry
@@ -56,9 +56,12 @@ class InProcessQueryBus(QueryBus):
         container: Container,
         registry: QueryRegistry,
         pipeline: MiddlewarePipeline,
+        group: BusGroup,
     ) -> None:
         """Take the resolving container, the query registry, and the shared pipeline."""
         super().__init__()
+        # The group settles every bus in this scope together; see `BusGroup`.
+        group.include(self)
         self._container = container
         self._registry = registry
         self._pipeline = pipeline

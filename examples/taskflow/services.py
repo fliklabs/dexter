@@ -38,6 +38,15 @@ class ConnectionPool:
         await asyncio.sleep(0)
         self.is_open = True
 
+    async def aclose(self) -> None:
+        """Release the pool. Registered as this binding's `dispose=`.
+
+        A singleton is owned by the root container, so this runs when the container closes —
+        not when any individual scope does.
+        """
+        await asyncio.sleep(0)
+        self.is_open = False
+
 
 async def open_pool(settings: Settings) -> ConnectionPool:
     """Build and open a pool.
@@ -91,6 +100,26 @@ class InMemoryRepository(Repository):
     async def count(self) -> int:
         """Return how many results this instance holds."""
         return len(self._results)
+
+
+class UnitOfWork:
+    """Per-request work that has to be finished off, whatever happens.
+
+    Bound `Scope.SCOPED` with a `dispose=`, which is the pairing that makes disposal worth
+    having: one of these exists per scope, and leaving the scope releases it. Note the key is
+    the concrete class, so the `dispose=` callback is checked against it — a callback is typed
+    against the *key* being bound, not against whatever implements it.
+    """
+
+    def __init__(self, pool: ConnectionPool) -> None:
+        """Take the shared pool this unit of work runs against."""
+        self.pool = pool
+        self.is_closed = False
+
+    async def aclose(self) -> None:
+        """Finish the unit of work. Runs when the owning scope exits."""
+        await asyncio.sleep(0)
+        self.is_closed = True
 
 
 _request_numbers = itertools.count(1)

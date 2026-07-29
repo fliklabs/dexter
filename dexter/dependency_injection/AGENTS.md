@@ -58,6 +58,31 @@ That is correct — a singleton must not hold a scope — and it is why anything
 per-request work from an injected container must itself be `Scoped`. The reference app's
 `JobDispatcher` is the worked example.
 
+## Disposal releases what the container created
+
+`dispose=` on `Binder.to` is explicit, never inferred from a method the instance happens to
+have. The tempting implicit rule — "call `aclose` if it exists" — picks the wrong method on the
+first type that disagrees, and `dexter.cqrs` is that type: a bus's `aclose` *cancels* its
+in-flight work, when what teardown wants is to drain it first.
+
+Three properties, each with a test in `test_disposal.py`:
+
+- **Reverse creation order.** An instance is tracked when its construction *completes*, and a
+  dependency completes before whatever needed it, so walking the list backwards releases
+  dependents first.
+- **Disposal runs before the container starts refusing.** A callback is the last chance to
+  finish work that resolves from this container. Closing first would forbid exactly that.
+- **Every callback runs.** Failures are collected and raised together as `DisposalError`; the
+  container is closed either way.
+
+`Scope.TRANSIENT` with a `dispose=` is **rejected at registration**. Nothing is kept, so the
+callback could only ever be a silent no-op — and tracking every transient in order to call it
+is how a container becomes a memory leak. `to_instance` takes no `dispose` at all: the caller
+built the object and still holds it.
+
+A parent still does **not** dispose its children. Scopes are context-managed, so they close
+themselves; making the root recursive would mean retaining every scope it ever handed out.
+
 ## Closing is terminal, for the whole ancestry
 
 `_ensure_open` walks to the root and refuses if **any** ancestor is closed. Checking only
@@ -110,10 +135,7 @@ edge and cannot close a cycle.
 
 ## Not implemented yet
 
-Disposal (`aclose`, `dispose=`, reverse-order release, `BaseExceptionGroup` aggregation) and
-`Lazy[T]` are the next change. `Container` is already an async context manager so that change
-adds nothing breaking. Until then `aclose()` releases the container's own state and cancels
-in-flight construction, but calls nothing on resolved instances.
+`Lazy[T]` is the next change.
 
 `lock_scope`-style pinning of an instance to an ancestor scope is deliberately absent. In the
 container being replaced it existed at two call sites to paper over scopes having only one

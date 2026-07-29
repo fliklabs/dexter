@@ -29,6 +29,13 @@ because calling it produces an instance.
 type Provider[T] = type[T] | Callable[..., T] | Callable[..., Awaitable[T]]
 """What produces a dependency: a class, a factory, or an async factory."""
 
+type Dispose[T] = Callable[[T], None] | Callable[[T], Awaitable[None]]
+"""What releases a dependency when its container closes.
+
+Takes the instance, so an unbound method is usually enough: `dispose=Pool.aclose`. It may be
+synchronous or asynchronous; an awaitable result is awaited.
+"""
+
 
 class Scope(StrEnum):
     """How long a resolved instance lives.
@@ -80,6 +87,9 @@ class Registration(BaseModel):
 
     has_instance: bool = False
     """Whether `instance` holds a pre-built value, since that value may itself be `None`."""
+
+    dispose: Callable[[Any], Any] | None = None
+    """Called with the instance when the owning container closes; `None` to release nothing."""
 
 
 class PlannedParameter:

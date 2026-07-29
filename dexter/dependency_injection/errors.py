@@ -5,7 +5,7 @@ Resolution failures carry the path taken to reach them. `args` stays the short m
 rendered chain.
 """
 
-from dexter.commons import DexterError, describe_type
+from dexter.commons import DexterError, DexterGroupError, describe_type
 
 from .models import ResolutionChain, Scope, describe_scope
 
@@ -187,6 +187,16 @@ class PositionalOnlyParameterError(ResolutionError):
 
 class ContainerStateError(DependencyInjectionError):
     """The container or a scope was used after it was closed."""
+
+
+class DisposalError(DexterGroupError, DependencyInjectionError):
+    """One or more `dispose=` callbacks failed while a container was closing.
+
+    An `ExceptionGroup`, because closing releases every instance the container created and one
+    failure must not stop the rest being released — or hide them. The container is closed
+    either way: this reports what went wrong on the way out, it does not mean teardown was
+    abandoned. Split it with `except*`.
+    """
 
 
 class ContainerClosedError(ContainerStateError):

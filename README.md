@@ -79,6 +79,20 @@ A `Container` belongs to one event loop. Concurrent resolutions of the same key 
 exactly one instance, and cancelling one resolver does not cancel construction for the
 others.
 
+**Closing releases what the container created.** Pass `dispose=` and it is called with the
+instance when the container or scope that built it closes, in reverse creation order — so a
+dependency is never released before whatever depends on it:
+
+```python
+builder.register(Pool).to(open_pool, scope=Scope.SINGLETON, dispose=Pool.aclose)
+```
+
+It is explicit rather than inferred from whatever `aclose`-shaped method a type happens to
+have, because that guess is wrong as often as it is right. Every callback runs even if an
+earlier one fails; the failures are raised together as `DisposalError`. A `Scope.TRANSIENT`
+binding cannot take one — nothing is kept, so it could only ever be a silent no-op — and
+neither can `to_instance`, since you built that object and still hold it.
+
 ### See it working
 
 Scope semantics are hard to picture from signatures, so there is a runnable reference app:
@@ -167,9 +181,8 @@ async with container.scope() as scope:
 **Sending hands back a ticket.** `dispatch` and `publish` return immediately with an id you
 can log or correlate, and `await ticket.result()` redeems the outcome whenever you want it —
 typed by the message, so `order_id` above is an `OrderId` and not `Any`. Never redeeming a
-ticket is a valid choice: the work still runs, and `await bus.drain()` reports anything that
-failed unobserved. Queries are the exception and are answered inline, since a read has nothing
-worth deferring.
+ticket is a valid choice: the work still runs, and leaving the scope waits for it. Queries are
+the exception and are answered inline, since a read has nothing worth deferring.
 
 | Message | Handlers | Sending it |
 | --- | --- | --- |
@@ -195,6 +208,20 @@ class Tracing:
 
 register_middleware(builder, Tracing, scope=Scope.SCOPED)
 ```
+
+**Leaving a scope settles its buses.** `use_cqrs` binds them so that the scope waits for every
+dispatch started in it and then reports anything that failed and was never redeemed. Nothing to
+remember, and no window in which a handler is still resolving from a scope that has closed:
+
+```python
+async with container.scope() as scope:
+    commands = await scope.resolve(CommandBus)
+    commands.dispatch(PlaceOrder(sku="DX-100", quantity=2))  # ticket dropped on purpose
+# the handler has run by here, and so has every event it published
+```
+
+That does mean leaving a scope blocks until its dispatches finish, in the same way
+`asyncio.TaskGroup` does.
 
 **Buses are `Scope.SCOPED`, always.** A bus resolves handlers from the container it holds, so a
 singleton one would capture the root and bypass the scope it was asked for; resolving a bus
