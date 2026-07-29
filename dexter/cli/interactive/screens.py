@@ -177,43 +177,110 @@ def confirm_screen(screen: Any, shell: str) -> bool:
             return False
 
 
-def output_screen(screen: Any, title: str, text: str, *, live: bool = False) -> None:
-    """Show a command's output, scrollable once it has finished.
-
-    While `live`, the view is pinned to the end so output appears as it is produced.
-    """
-    lines = text.splitlines() or ["(no output)"]
+def output_screen(screen: Any, title: str, text: str) -> None:
+    """Show a finished command's output, scrollable, until a key dismisses it."""
+    lines = _lines(text)
     visible = body_height(screen)
-    offset = max(0, len(lines) - visible) if live else 0
+    offset = 0
 
     while True:
-        screen.erase()
-        header(screen, title)
-        for row, line in enumerate(lines[offset : offset + visible]):
-            write(screen, row + 1, 0, line)
-        if live:
-            footer(screen, "running…")
-            screen.refresh()
-            return
+        _paint(screen, title, lines, offset, visible)
         footer(screen, "↑↓ scroll   any other key returns")
         screen.refresh()
 
         key = read_key(screen)
         if key == REDRAW:
             continue
-        if key == curses.KEY_UP:
-            offset = max(0, offset - 1)
-        elif key == curses.KEY_DOWN:
-            offset = min(max(0, len(lines) - visible), offset + 1)
-        elif key == curses.KEY_PPAGE:
-            offset = max(0, offset - visible)
-        elif key == curses.KEY_NPAGE:
-            offset = min(max(0, len(lines) - visible), offset + visible)
-        else:
+        if key not in SCROLL_KEYS:
             return
+        # `None` means "the end" — resolved to a line here rather than left as a sentinel,
+        # because a finished command produces no more output and so has nothing to follow.
+        # Treating it as zero would send a reader who scrolled to the bottom back to the top.
+        offset = _clamp(scrolled(offset, key, len(lines), visible), len(lines), visible)
+
+
+def live_screen(screen: Any, title: str, text: str, offset: int | None = None) -> None:
+    """Show a running command's output.
+
+    `offset` of `None` follows the end, so new output appears as it is produced. A number
+    pins the view there instead — which is the whole reason this takes one. A pane that
+    always jumped to the bottom could not be read while anything was still writing to it,
+    and a long-running command is exactly the case where you want to look back.
+    """
+    lines = _lines(text)
+    visible = body_height(screen)
+    position = _clamp(offset, len(lines), visible)
+
+    _paint(screen, title, lines, position, visible)
+    if offset is None:
+        footer(screen, "running…   ↑↓ PgUp/PgDn scroll   Ctrl+C stop")
+    else:
+        showing = min(position + visible, len(lines))
+        footer(
+            screen,
+            f"paused — showing {position + 1}-{showing} of {len(lines)}   "
+            f"End follows   Ctrl+C stop",
+        )
+    screen.refresh()
+
+
+def scrolled(offset: int | None, key: int, total: int, visible: int) -> int | None:
+    """Apply one scroll key. `None` means following the end rather than pinned to a line.
+
+    Scrolling back to the bottom returns `None`, so reaching the end resumes following
+    instead of freezing one line short of it — which would look like the output had stopped.
+    """
+    if key == curses.KEY_END:
+        return None
+    if key == curses.KEY_HOME:
+        return 0
+
+    if key in _BY_LINE:
+        delta = _BY_LINE[key]
+    elif key in _BY_PAGE:
+        delta = _BY_PAGE[key] * visible
+    else:
+        return offset
+
+    bottom = max(0, total - visible)
+    settled = max(0, min(_clamp(offset, total, visible) + delta, bottom))
+    return None if settled >= bottom else settled
 
 
 # ── internals ────────────────────────────────────────────────────────
+
+
+_BY_LINE = {curses.KEY_UP: -1, curses.KEY_DOWN: 1}
+_BY_PAGE = {curses.KEY_PPAGE: -1, curses.KEY_NPAGE: 1}
+"""Kept apart rather than encoded as one number.
+
+Folding them into a single table means a magnitude has to mean "and this one is a page", which
+reads as a distance and multiplies as a count — a page key then moves two pages, quietly.
+"""
+
+SCROLL_KEYS = (*_BY_LINE, *_BY_PAGE, curses.KEY_HOME, curses.KEY_END)
+"""Every key that scrolls rather than meaning something else."""
+
+
+def _lines(text: str) -> list[str]:
+    """The rows to draw, never empty."""
+    return text.splitlines() or ["(no output)"]
+
+
+def _clamp(offset: int | None, total: int, visible: int) -> int:
+    """Where to actually start drawing: the end when following, else a valid line."""
+    bottom = max(0, total - visible)
+    return bottom if offset is None else max(0, min(offset, bottom))
+
+
+def _paint(
+    screen: Any, title: str, lines: list[str], offset: int, visible: int
+) -> None:
+    """Draw the header and one window's worth of output. The caller adds the footer."""
+    screen.erase()
+    header(screen, title)
+    for row, line in enumerate(lines[offset : offset + visible]):
+        write(screen, row + 1, 0, line)
 
 
 def _scroll_top(cursor: int, visible: int) -> int:

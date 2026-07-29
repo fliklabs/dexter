@@ -24,8 +24,16 @@ from ..console import CliConsole
 from ..models import read_fields, shell_command, to_argv
 from ..runner import Capture, Outcome, invoke
 from .menu import Menu
-from .rendering import INTERRUPT, Modal, Quit, polling, terminal
-from .screens import confirm_screen, list_screen, output_screen, params_screen
+from .rendering import INTERRUPT, Modal, Quit, body_height, polling, terminal
+from .screens import (
+    SCROLL_KEYS,
+    confirm_screen,
+    list_screen,
+    live_screen,
+    output_screen,
+    params_screen,
+    scrolled,
+)
 
 _TICK = 0.03
 """Seconds between polls while a command runs.
@@ -144,7 +152,8 @@ async def _watch(
     thing to already be stopped.
     """
     modal: Modal | None = None
-    painted = None
+    painted: tuple[str, int | None] | None = None
+    offset: int | None = None
 
     with polling(screen):
         while True:
@@ -157,33 +166,69 @@ async def _watch(
             if finished:
                 break
 
-            key = _poll(screen)
-
-            if modal is not None:
-                answer = None if key == _NOTHING else modal.key(key)
-                if answer is None:
-                    modal.draw(screen)
-                    continue
-                modal, painted = None, None
-                if answer:
-                    task.cancel()
-                continue
-
-            if key == INTERRUPT:
-                modal = Modal(f"Stop {title}?", deny="Keep running", affirm="Stop")
-                modal.draw(screen)
-                continue
+            for key in _pending(screen):
+                if modal is not None:
+                    answer = modal.key(key)
+                    if answer is None:
+                        continue
+                    modal = None
+                    if answer:
+                        task.cancel()
+                elif key == INTERRUPT:
+                    modal = Modal(f"Stop {title}?", deny="Keep running", affirm="Stop")
+                elif key in SCROLL_KEYS:
+                    offset = scrolled(
+                        offset,
+                        key,
+                        len(output().splitlines()),
+                        body_height(screen),
+                    )
 
             current = output()
-            if current != painted:
-                output_screen(screen, f"Running: {title}", current, live=True)
-                painted = current
+            if modal is not None:
+                # Repainted every turn while the box is up: the selection has to follow the
+                # arrow keys, and the output underneath carries on arriving. The pane is drawn
+                # first so the box always floats over what is current rather than over
+                # whatever happened to be on screen when the interrupt landed.
+                live_screen(screen, f"Running: {title}", current, offset)
+                modal.draw(screen)
+                painted = None
+            elif (current, offset) != painted:
+                # Redrawn when the output changed *or* the view moved, so scrolling responds
+                # even while nothing new is arriving — and a command producing a line a second
+                # does not yank the view back to the bottom out from under someone reading it.
+                live_screen(screen, f"Running: {title}", current, offset)
+                painted = (current, offset)
 
     return await task
 
 
 _NOTHING = -1
 """What a non-blocking `getch` returns when no key is waiting."""
+
+_BURST = 128
+"""Keys taken in one turn before the loop yields again.
+
+A ceiling rather than a target: whatever is left stays buffered for the next turn, so a
+terminal pasting a wall of input cannot starve the command of the event loop.
+"""
+
+
+def _pending(screen: Any) -> list[int]:
+    """Every key waiting right now, in order.
+
+    Draining the buffer matters more than it looks. Taking one key per turn caps input at one
+    event per `_TICK` — and a held arrow key or a wheel emits them faster than that, so the
+    backlog grows and the screen falls further behind the longer someone scrolls. Reading
+    until the buffer is empty means the view lands where the input actually got to.
+    """
+    keys: list[int] = []
+    while len(keys) < _BURST:
+        key = _poll(screen)
+        if key == _NOTHING:
+            break
+        keys.append(key)
+    return keys
 
 
 def _poll(screen: Any) -> int:

@@ -120,6 +120,17 @@ def polling(screen: Any) -> Iterator[None]:
         screen.nodelay(False)
 
 
+_LAYOUT = ("border", "prompt", "gap", "options", "hint", "border")
+"""The rows a modal box occupies, named so the arithmetic below reads as a layout."""
+
+_HINT = "←→ choose   Enter confirm   ESC cancel"
+_NARROWEST = len(_HINT)
+"""No narrower than its own instructions, or the box explains nothing."""
+
+_GAP = 2
+"""Columns between the two options."""
+
+
 class Modal:
     """A two-option prompt drawn over whatever is already on screen.
 
@@ -138,14 +149,37 @@ class Modal:
         self.selected = 0
 
     def draw(self, screen: Any) -> None:
-        """Paint the prompt and the two options over the current screen."""
+        """Paint a bordered box centred over whatever is already on screen.
+
+        Drawn as a box rather than a couple of lines because it interrupts: it appears over
+        output that is still arriving, and a prompt that reads as one more line of that output
+        is a prompt people answer by accident. The border is what says "this is asking you
+        something". Nothing underneath is erased, so the box floats.
+        """
         height, width = screen.getmaxyx()
-        row = max(0, height // 2 - 2)
-        write(screen, row, 2, self.prompt.ljust(width - 3), curses.A_BOLD)
-        for index, label in enumerate(self.options):
+        labels = [f"  {label}  " for label in self.options]
+        content = max(len(self.prompt), sum(len(label) for label in labels) + _GAP)
+        inner = max(_NARROWEST, min(content, width - 6))
+        box = inner + 4
+        top = max(0, height // 2 - len(_LAYOUT) // 2)
+        left = max(0, (width - box) // 2)
+
+        write(screen, top, left, f"┌{'─' * (box - 2)}┐", curses.A_BOLD)
+        for offset in range(1, len(_LAYOUT) - 1):
+            write(screen, top + offset, left, f"│{' ' * (box - 2)}│", curses.A_BOLD)
+        write(
+            screen, top + len(_LAYOUT) - 1, left, f"└{'─' * (box - 2)}┘", curses.A_BOLD
+        )
+
+        write(screen, top + 1, left + 2, self.prompt[:inner], curses.A_BOLD)
+
+        column = left + 2
+        for index, label in enumerate(labels):
             attribute = curses.A_REVERSE if index == self.selected else curses.A_NORMAL
-            write(screen, row + 2, 2 + index * 14, f"  {label}  ", attribute)
-        footer(screen, "←→ choose   Enter confirm   ESC cancel")
+            write(screen, top + 3, column, label, attribute)
+            column += len(label) + _GAP
+
+        write(screen, top + 4, left + 2, _HINT[:inner], curses.A_DIM)
         screen.refresh()
 
     def key(self, key: int) -> bool | None:

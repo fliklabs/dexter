@@ -18,6 +18,8 @@ KEYS = {
     "down": curses.KEY_DOWN,
     "pgup": curses.KEY_PPAGE,
     "pgdn": curses.KEY_NPAGE,
+    "home": curses.KEY_HOME,
+    "end": curses.KEY_END,
     "left": curses.KEY_LEFT,
     "right": curses.KEY_RIGHT,
     "tab": ord("\t"),
@@ -60,8 +62,20 @@ class FakeScreen:
         self._size = size
         self._pending: dict[int, str] = {}
         self._polling = False
+        self._served = 0
         self.frames: list[list[str]] = []
         self.reads = 0
+
+        self.keys_per_turn = 1
+        """How many keystrokes land between two non-blocking polls.
+
+        One by default, because a script is the whole session and a real terminal only holds
+        what has actually been typed so far — without this, a caller that drains the buffer
+        would swallow every key the test meant for later screens.
+
+        Raise it to model input arriving faster than the loop turns: a held arrow key, a
+        wheel, a paste.
+        """
 
     # ── the curses window surface ────────────────────────────────────
 
@@ -72,9 +86,12 @@ class FakeScreen:
         return self._size
 
     def addstr(self, row: int, column: int, text: str, attribute: int = 0) -> None:
-        existing = self._pending.get(row, "")
-        padded = existing.ljust(column)
-        self._pending[row] = padded[:column] + text
+        # Overlays rather than truncating, because that is what curses does: writing into the
+        # middle of a row leaves what is on either side of it alone. Truncating would make a
+        # box drawn round something appear to lose its right-hand border the moment anything
+        # was written inside it.
+        existing = self._pending.get(row, "").ljust(column)
+        self._pending[row] = existing[:column] + text + existing[column + len(text) :]
 
     def refresh(self) -> None:
         height = self._size[0]
@@ -82,15 +99,20 @@ class FakeScreen:
 
     def nodelay(self, flag: bool) -> None:
         self._polling = flag
+        self._served = 0
 
     def getch(self) -> int:
         self.reads += 1
-        if not self._keys:
-            if self._polling:
-                # Watching a running command: no key waiting is the ordinary case, and the
-                # loop is expected to keep asking. Only a *blocking* read that runs out means
-                # a screen failed to return, which is what `OutOfKeysError` is for.
+        if self._polling:
+            # Watching a running command: an empty buffer is the ordinary case, and the loop
+            # is expected to keep asking. Only a *blocking* read that runs out means a screen
+            # failed to return, which is what `OutOfKeysError` is for.
+            if not self._keys or self._served >= self.keys_per_turn:
+                self._served = 0
                 return NOTHING
+            self._served += 1
+            return self._keys.pop(0)
+        if not self._keys:
             raise OutOfKeysError("the screen asked for a key the test did not script")
         return self._keys.pop(0)
 

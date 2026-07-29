@@ -80,6 +80,42 @@ Three details are load-bearing, and each has a test:
 while `nodelay` is on. Both halves matter: a *blocking* read that runs out still means a screen
 failed to return, which is the bug that error exists to catch.
 
+## The running pane scrolls, and `None` means "follow"
+
+`live_screen` takes an offset, and `None` follows the end. A pane that always jumped to the
+bottom could not be read while anything was still writing to it — which is exactly the case a
+long-running command creates. `scrolled` returns `None` again once the view reaches the bottom,
+so scrolling back down resumes following rather than freezing one line short of it and looking
+like the output had stopped.
+
+**Every key waiting is taken in one turn.** Reading a single key per turn caps input at one
+event per `_TICK`, and a held arrow key or a wheel emits them faster than that — so the backlog
+grows for as long as someone keeps scrolling and the view lands where they were a moment ago.
+`_pending` drains the buffer, with a ceiling so a pasted wall of input cannot starve the
+command of the event loop.
+
+`FakeScreen.keys_per_turn` exists for the same reason: a script is the whole session, so
+without it a drain would swallow every key the test meant for later screens. One per turn is
+the default; raise it to model input arriving faster than the loop turns.
+
+Three things that bit while writing this, all now pinned by tests:
+
+- **`None` is not zero.** The finished pager has nothing to follow, so it resolves `None` to
+  the last line. Treating it as `0` sent a reader who scrolled to the bottom back to the top.
+- **A page is a page.** Line steps and page steps are separate tables. Folding them into one
+  needs a magnitude to mean "and this one is a page", which then multiplies by the window and
+  moves two.
+
+## A modal is a bordered box, and it floats
+
+It appears over output that is still arriving, and a prompt indistinguishable from one more
+line of that output is a prompt people answer by accident. Nothing underneath is erased, and the
+pane is repainted immediately *before* the box is drawn — otherwise an interrupt arriving before
+the first repaint leaves the box floating over the previous screen.
+
+`Modal` is drawing plus one key step for the same reason: the command carries on while the
+question is up.
+
 ## Menu state is separate from menu drawing
 
 `interactive/menu.py` holds every decision — the stack, the per-level cursor, what a selection

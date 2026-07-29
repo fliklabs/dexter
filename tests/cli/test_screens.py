@@ -1,5 +1,7 @@
 """The screens, driven by a scripted keyboard against a fake window."""
 
+import curses
+
 import click
 import pytest
 
@@ -7,8 +9,10 @@ from dexter.cli.interactive import Menu
 from dexter.cli.interactive.screens import (
     confirm_screen,
     list_screen,
+    live_screen,
     output_screen,
     params_screen,
+    scrolled,
 )
 from dexter.cli.models import read_fields
 
@@ -309,19 +313,79 @@ class TestOutputScreen:
 
         assert "(no output)" in screen.last_text()
 
-    def test_live_mode_returns_without_waiting_for_a_key(self) -> None:
+
+class TestOutputScreenScrolling:
+    def test_scrolling_to_the_bottom_stays_there(self) -> None:
+        """Not back to the top: `scrolled` reports the end as `None`, which is not line zero."""
+        text = "\n".join(str(number) for number in range(20))
+        # Four rows visible, so twenty lines are five pages: four to reach the end, and a
+        # fifth that must not move.
+        screen = FakeScreen(["pgdn"] * 5 + [ord("q")], size=(6, 80))
+
+        output_screen(screen, "greet", text)
+
+        assert "19" in screen.last_text()
+        assert "\n0\n" not in screen.last_text()
+
+
+class TestLiveScreen:
+    """The pane a command is watched through: it draws once and never waits for a key."""
+
+    def test_returns_without_waiting_for_a_key(self) -> None:
         screen = FakeScreen([])
-        output_screen(screen, "greet", "working", live=True)
+        live_screen(screen, "greet", "working")
 
         assert "running" in screen.last_text()
         assert screen.reads == 0
 
-    def test_live_mode_pins_the_view_to_the_end(self) -> None:
+    def test_follows_the_end_by_default(self) -> None:
         screen = FakeScreen([], size=(6, 80))
-        output_screen(screen, "greet", "\n".join(str(n) for n in range(20)), live=True)
+        live_screen(screen, "greet", "\n".join(str(n) for n in range(20)))
 
         assert "19" in screen.last_text()
         assert "0\n" not in screen.last_text()
+
+    def test_an_offset_pins_the_view_instead(self) -> None:
+        screen = FakeScreen([], size=(6, 80))
+        live_screen(screen, "greet", "\n".join(str(n) for n in range(20)), 0)
+
+        assert "paused" in screen.last_text()
+        assert "19" not in screen.last_text()
+
+    def test_an_offset_past_the_end_is_clamped(self) -> None:
+        screen = FakeScreen([], size=(6, 80))
+        live_screen(screen, "greet", "\n".join(str(n) for n in range(20)), 999)
+
+        assert "19" in screen.last_text()
+
+
+class TestScrolled:
+    """Where a scroll key moves the view. `None` means following the end."""
+
+    def test_up_from_the_end_pins_the_view(self) -> None:
+        assert scrolled(None, curses.KEY_UP, total=20, visible=5) == 14
+
+    def test_down_at_the_end_resumes_following(self) -> None:
+        # Not 15: stopping one line short of the bottom would look like output had stopped.
+        assert scrolled(14, curses.KEY_DOWN, total=20, visible=5) is None
+
+    def test_page_keys_move_a_window_at_a_time(self) -> None:
+        assert scrolled(None, curses.KEY_PPAGE, total=20, visible=5) == 10
+
+    def test_home_goes_to_the_first_line(self) -> None:
+        assert scrolled(None, curses.KEY_HOME, total=20, visible=5) == 0
+
+    def test_end_resumes_following(self) -> None:
+        assert scrolled(0, curses.KEY_END, total=20, visible=5) is None
+
+    def test_cannot_scroll_above_the_first_line(self) -> None:
+        assert scrolled(0, curses.KEY_PPAGE, total=20, visible=5) == 0
+
+    def test_a_key_that_does_not_scroll_changes_nothing(self) -> None:
+        assert scrolled(3, ord("x"), total=20, visible=5) == 3
+
+    def test_output_shorter_than_the_window_is_always_followed(self) -> None:
+        assert scrolled(None, curses.KEY_UP, total=2, visible=5) is None
 
     def test_scrolling_moves_the_view(self) -> None:
         text = "\n".join(str(number) for number in range(50))

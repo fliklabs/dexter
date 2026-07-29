@@ -11,6 +11,7 @@ row there would silently shift them all.
 
 import asyncio
 import contextlib
+import curses
 from collections.abc import Iterator
 from typing import Any
 
@@ -32,6 +33,14 @@ ABORTED = 130
 """What a command that was stopped reports, the same as one that was aborted."""
 
 
+CHATTER = 40
+"""Lines `linger` prints before it blocks.
+
+More than fits on a screen, on purpose: a view can only be scrolled when there is something
+above it, so a command producing two lines could not exercise the pane at all.
+"""
+
+
 @click.command("linger")
 @inject
 async def linger(scope: Container) -> None:
@@ -39,6 +48,8 @@ async def linger(scope: Container) -> None:
     console = await scope.resolve(CliConsole)
     ledger = await scope.resolve(Ledger)
     console.ok("serving")
+    for tick in range(CHATTER):
+        console.detail(f"tick {tick:02d}")
     try:
         await asyncio.Event().wait()  # never set: only cancellation ends this
     finally:
@@ -196,6 +207,163 @@ class TestStoppingARunningCommand:
         )
 
         assert "serving" in screen.text()
+
+
+class TestTheModal:
+    async def test_is_drawn_as_a_bordered_box(
+        self, builder: ContainerBuilder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It interrupts output that is still arriving, so it has to look like it does."""
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
+
+        drawn = screen.text()
+        assert "┌" in drawn
+        assert "┐" in drawn
+        assert "└" in drawn
+        assert "┘" in drawn
+        assert "│" in drawn
+
+    async def test_floats_over_the_output_rather_than_replacing_it(
+        self, builder: ContainerBuilder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pane follows the end, so its last line must survive under the box."""
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
+
+        boxed = next(
+            frame for frame in screen.frames if any("┌" in row for row in frame)
+        )
+        assert any(f"tick {CHATTER - 1:02d}" in row for row in boxed)
+
+
+class TestScrollingWhileItRuns:
+    async def test_a_scroll_key_pauses_the_view(
+        self, builder: ContainerBuilder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pane that always jumped to the end could not be read while output arrived."""
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            "pgup",  # look back
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
+
+        assert "paused" in screen.text()
+
+    async def test_end_resumes_following(
+        self, builder: ContainerBuilder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            "pgup",
+            "end",
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
+
+        # The last thing drawn before the modal went up is following again.
+        following = [
+            frame for frame in screen.frames if any("running…" in r for r in frame)
+        ]
+        assert following, "never returned to following the end"
+
+    async def test_scrolling_does_not_stop_the_command(
+        self, builder: ContainerBuilder, monkeypatch: pytest.MonkeyPatch, ledger: Ledger
+    ) -> None:
+        exit_code, _ = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            "pgup",
+            "pgdn",
+            "up",
+            "down",
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
+
+        assert exit_code == ABORTED
+        assert ledger.entries.count("stopped") == 1
+
+
+class TestDrainingTheKeyboard:
+    """Every key waiting is taken in one turn, not one key per turn.
+
+    This is what keeps scrolling level with the hand doing it. A held arrow key or a wheel
+    emits faster than the loop turns, so taking a single key each time leaves a backlog that
+    grows for as long as someone keeps scrolling — and the view lands where they were several
+    moments ago rather than where they are.
+    """
+
+    def test_takes_every_key_waiting(self) -> None:
+        screen = FakeScreen(["up", "up", "down"])
+        screen.keys_per_turn = 3
+        screen.nodelay(True)
+
+        assert navigator._pending(screen) == [
+            curses.KEY_UP,
+            curses.KEY_UP,
+            curses.KEY_DOWN,
+        ]
+
+    def test_takes_nothing_when_the_buffer_is_empty(self) -> None:
+        screen = FakeScreen([])
+        screen.nodelay(True)
+
+        assert navigator._pending(screen) == []
+
+    def test_leaves_the_rest_buffered_rather_than_starving_the_command(self) -> None:
+        """A terminal pasting a wall of input must not hold the event loop."""
+        screen = FakeScreen(["down"] * (navigator._BURST * 2))
+        screen.keys_per_turn = navigator._BURST * 2
+        screen.nodelay(True)
+
+        assert len(navigator._pending(screen)) == navigator._BURST
 
 
 class TestCommandsThatFinishOnTheirOwn:
