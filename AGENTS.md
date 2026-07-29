@@ -19,7 +19,7 @@ framework. Read source files directly — there is no external documentation.
 | `dexter.cqrs` | Implemented | Commands, queries, events and their buses |
 | `dexter.cli` | Implemented | A keyboard-navigable CLI. Ships no commands — consumers register their own |
 | `dexter.api` | Implemented | Typed request handlers, exposed over HTTP. `dexter.api.http` is the only part that knows a web framework exists |
-| `dexter.application` | Planned | Application composition and wiring |
+| `dexter.application` | Implemented | Composing an application from modules. The only module that depends on two others, which is its job |
 | `dexter.caching` | Planned | Cache abstractions |
 | `dexter.observability` | Planned | Tracing and instrumentation |
 
@@ -319,16 +319,23 @@ and `examples/`. Its entry point is `./dx`, a launcher in the same shape as `./v
 unchanged by any of this; `./dx test` is the feedback loop, and reports pass rate, timing and
 coverage that the gate does not. `./dx verify` just shells out to the gate.
 
-**`./dx serve` is the only thing in this repository that binds a port.** It puts all three
-reference applications behind one address so they can be poked from a browser, and it lives in
-`tools/` rather than `examples/` for one reason: CI smoke-runs every example with no timeout,
-and a server would hang it. The examples themselves still terminate. Its `uvicorn` dependency
+**`./dx serve` is the only thing in this repository that binds a port.** It serves the
+reference application so it can be poked from a browser, and it lives in `tools/` rather than
+`examples/` for one reason: CI smoke-runs the example with no timeout, and a server would hang
+it. The example itself still terminates — `python -m examples.storefront` runs the same
+container as a worker. Its `uvicorn` dependency
 is in the `tools` group, never in `[project.dependencies]` — `dexter.api` hands back an ASGI
 application and never runs one, so a consumer inherits no server from us.
 
 **`tools/**/*.py` ignores `T20` only.** Writing to a terminal is the whole job.
 
 ## Examples
+
+**There is one reference application**, `examples/storefront`, and it is the thing a consumer
+copies to start a service. It is composed from modules under `modules/`, each with its own
+`use_<module>` — see `dexter/application/AGENTS.md`. Adding a second example needs a reason:
+one app that is obviously the one to copy beats three that each teach a different third of the
+framework.
 
 Runnable reference applications live in `examples/` at the repo root — never inside `dexter/`,
 and never in the wheel (`packages = ["dexter"]` is a whitelist, so leakage is impossible). They

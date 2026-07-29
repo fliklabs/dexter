@@ -51,6 +51,17 @@ from dexter.api import (
 from dexter.api import ApiMiddleware as ApiMiddlewareContract
 from dexter.api import ApiNext as ApiNextContract
 from dexter.api.http import create_app
+from dexter.application import (
+    ApplicationError,
+    ApplicationNotWiredError,
+    DuplicateModuleError,
+    InvalidModuleError,
+    Module,
+    ModuleRegistry,
+    describe_module,
+    register_module,
+    use_application,
+)
 from dexter.cli import (
     ACCENT,
     Capture,
@@ -433,3 +444,27 @@ class TestApiSurface:
         assert result.stdout.strip() == "False", (
             "importing dexter.api pulled in a web framework; the seam has been broken"
         )
+
+
+class TestApplicationSurface:
+    def test_the_module_contract_is_exported(self) -> None:
+        assert Module is not None
+        assert describe_module(use_application) == "use_application"
+
+    def test_the_wiring_entry_points_are_exported(self) -> None:
+        assert {use_application, register_module}
+
+    def test_the_registry_is_exported(self) -> None:
+        # Named `ModuleRegistry`, not `Registry`: `dexter.cqrs` and `dexter.cli` already own
+        # `CommandRegistry` and `CommandTree`, and an application imports all three.
+        assert len(ModuleRegistry()) == 0
+
+    def test_every_error_is_exported(self) -> None:
+        errors = {
+            ApplicationError,
+            ApplicationNotWiredError,
+            DuplicateModuleError,
+            InvalidModuleError,
+        }
+        assert all(issubclass(error, ApplicationError) for error in errors)
+        assert issubclass(ApplicationError, DexterError)

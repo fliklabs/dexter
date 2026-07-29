@@ -1,14 +1,13 @@
-"""Serving all three reference applications from one address.
+"""Serving the reference application.
 
-The examples are otherwise only readable as printed transcripts. This puts them behind a real
-socket so they can be poked from a browser — which is the only way to see what a schema, a
-status code or a per-request scope actually does to a caller.
+The service is otherwise only readable as a printed transcript. This puts it behind a real
+socket so it can be poked from a browser — which is the only way to see what a schema, a status
+code or a per-request scope actually does to a caller.
 
-**Three containers, one application.** They are not merged, and could not be: `use_cqrs` binds
-its registries unconditionally and `ContainerBuilder.register` refuses a repeat, so two
-examples that both use CQRS can never share a builder. They do not need to. `create_app` takes
-an application and a prefix, so each example keeps its own container, its own wiring and its
-own readable `wiring.py`, and the routes land side by side under one Swagger UI.
+**The same container the worker builds.** `examples.storefront.application.build_container` is
+called here exactly as `python -m examples.storefront` calls it; the only difference is what
+happens next. That is what a module list buys: one description of what the service is, and two
+ways to run it.
 
 This is the only thing in the repository that binds a port, which is why it lives here rather
 than in `examples/`: an example is smoke-run by CI with no timeout, and a server would hang it.
@@ -27,14 +26,10 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
 from dexter.api.http import create_app
+from dexter.application import ModuleRegistry
 from dexter.cli import CliConsole, inject
 from dexter.dependency_injection import Container
-from examples.frontdesk.wiring import build_container as build_frontdesk
-from examples.storefront.wiring import build_container as build_storefront
-from examples.taskflow.wiring import build_container as build_taskflow
-
-MOUNTS = ("/taskflow", "/storefront", "/frontdesk")
-"""Where each example is served, in the order the index lists them."""
+from examples.storefront.application import build_container
 
 
 @click.command("serve")
@@ -50,38 +45,36 @@ async def serve(scope: Container, host: str, port: int, *, open_browser: bool) -
     copy, and two of them use CQRS so they could not share a builder anyway.
     """
     console = await scope.resolve(CliConsole)
-    containers = [
-        build_taskflow(with_api=True),
-        build_storefront(with_api=True),
-        build_frontdesk(),
-    ]
+    container = build_container()
     try:
-        app = await _compose(containers)
-        return await _serve(app, host, port, console, open_browser=open_browser)
+        app = await _compose(container)
+        modules = (await container.resolve(ModuleRegistry)).names()
+        return await _serve(
+            app, host, port, console, modules, open_browser=open_browser
+        )
     finally:
-        for container in containers:
-            await container.aclose()
+        await container.aclose()
 
 
-async def _compose(containers: list[Container]) -> FastAPI:
-    """Put every example's routes onto one application, under its own prefix."""
+async def _compose(container: Container) -> FastAPI:
+    """Put every module's routes onto one application."""
     app = FastAPI(
-        title="dexter reference applications",
-        description="Three examples, three containers, one address.",
+        title="dexter reference service",
+        description="A storefront, composed from modules.",
     )
-    for container, prefix in zip(containers, MOUNTS, strict=True):
-        await create_app(container, app=app, prefix=prefix)
+    await create_app(container, app=app)
 
     app.middleware("http")(_log_requests)
     app.get("/", include_in_schema=False)(_index)
     return app
 
 
-async def _serve(
+async def _serve(  # noqa: PLR0913 - a server; every one of these is a distinct fact
     app: FastAPI,
     host: str,
     port: int,
     console: CliConsole,
+    modules: tuple[str, ...],
     *,
     open_browser: bool,
 ) -> int:
@@ -105,7 +98,7 @@ async def _serve(
     # delivers Ctrl+C as a byte, so stopping is the navigator cancelling this command, which
     # arrives below as cancellation rather than as a signal.
 
-    _announce(console, host, port)
+    _announce(console, host, port, modules)
     if open_browser:
         webbrowser.open(f"http://{host}:{port}/docs")
 
@@ -143,16 +136,17 @@ def _bind(host: str, port: int) -> socket.socket:
     return sock
 
 
-def _announce(console: CliConsole, host: str, port: int) -> None:
-    """Say where everything is, before anything is listening."""
+def _announce(
+    console: CliConsole, host: str, port: int, modules: tuple[str, ...]
+) -> None:
+    """Say where everything is, and what is being served, before anything is listening."""
     base = f"http://{host}:{port}"
     console.heading("serving")
     table = console.table("What", "Where")
     table.add_row("[cyan]everything[/]", f"{base}/docs")
     table.add_row("[cyan]index[/]", base)
-    for mount in MOUNTS:
-        table.add_row(f"[dim]{mount.lstrip('/')}[/]", f"{base}{mount}")
     console.print(table)
+    console.detail(f"modules: {', '.join(modules)}")
     console.detail("Ctrl+C to stop")
 
 
@@ -176,17 +170,10 @@ async def _log_requests(
 
 
 async def _index() -> HTMLResponse:
-    """A plain page linking everything, so a browser has somewhere to start."""
-    # One `/docs` for all of it, not one per mount: the routes were added to a single
-    # application rather than mounted as sub-applications, which is what makes a single schema
-    # — and a single place to try any of them — possible. The list below is a map of what is
-    # served where; the docs are where you actually send a request.
-    items = "".join(
-        f"<li><code>{mount}/…</code> — {mount.lstrip('/')}</li>" for mount in MOUNTS
-    )
+    """A plain page pointing at the docs, so a browser has somewhere to start."""
     return HTMLResponse(
-        "<h1>dexter reference applications</h1>"
-        "<p>Three examples, three containers, one address. Send requests from the "
-        '<a href="/docs">shared API docs</a>.</p>'
-        f"<ul>{items}</ul>"
+        "<h1>dexter reference service</h1>"
+        "<p>A storefront, composed from modules. Send requests from the "
+        '<a href="/docs">API docs</a> — every module\'s routes are there, grouped by '
+        "the tag it registered them under.</p>"
     )

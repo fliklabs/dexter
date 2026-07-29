@@ -23,6 +23,7 @@ drives an event loop on your behalf.
 | `dexter.cqrs` | Implemented — commands, queries, events, buses, middleware |
 | `dexter.cli` | Implemented — a keyboard-navigable CLI you register commands into |
 | `dexter.api` | Implemented — typed request handlers, served over HTTP |
+| `dexter.application` | Implemented — composing a service from modules |
 
 ## Install
 
@@ -99,15 +100,13 @@ neither can `to_instance`, since you built that object and still hold it.
 
 ### See it working
 
-Scope semantics are hard to picture from signatures, so there is a runnable reference app:
-
 ```bash
-uv run python -m examples.taskflow
+uv run python -m examples.storefront --section settling
 ```
 
-It handles several jobs concurrently, one container scope each, and labels every instance so you
-can see the singleton shared across all of them, the scoped instance rebuilt per scope, and the
-transient differing on every resolve. See [examples/README.md](./examples/README.md).
+The reference service, run as a worker. Scope semantics are hard to picture from a signature,
+so the transcript shows a scope being left and the work started inside it finishing first. See
+[examples/README.md](./examples/README.md).
 
 ## For consumers using mypy
 
@@ -239,9 +238,9 @@ registered, long before anything dispatches.
 uv run python -m examples.storefront
 ```
 
-An order service that places orders, fans an event out to two reactions, correlates what a
-handler publishes with the command that caused it, dispatches without redeeming, and shows what
-an aggregated failure reports. See [examples/README.md](./examples/README.md).
+An order service: a command handed a ticket redeemed later, an event reaching a reaction nobody
+awaited, and what dispatching something unwired reports. See
+[examples/README.md](./examples/README.md).
 
 ## CLI
 
@@ -449,14 +448,69 @@ six lines above are.
 ### See it working
 
 ```bash
-uv run python -m examples.frontdesk
+./dx serve      # http://127.0.0.1:8000/docs
 ```
 
-A hotel front desk over a CQRS core: path, query and body binding, a handler reading a header
-and a cookie, a tenant injected into a service that never mentions HTTP, middleware refusing a
-request, mapped and unmapped failures, and the request scope settling a command's event before
-the response is written. It starts no server — it calls the ASGI application directly. See
+The reference service behind a socket: path, query and body binding, mapped failures as problem
+details, and a container scope per request. The same container the worker builds. See
 [examples/README.md](./examples/README.md).
+
+## Application
+
+A **module** is one capability of a service — a domain, its handlers, its routes, the services
+they need — registered by one function:
+
+```python
+from dexter.application import register_module, use_application
+
+
+def use_orders(builder: ContainerBuilder) -> None:
+    """Everything the orders module contributes."""
+    builder.register(Orders).to(InMemoryOrders, scope=Scope.SINGLETON)
+    register_command_handler(
+        builder, PlaceOrder, PlaceOrderHandler, scope=Scope.TRANSIENT
+    )
+    register_error(builder, NoSuchOrderError, status=HTTPStatus.NOT_FOUND)
+    register_handler(builder, PlaceOrderApi, HttpExposure(...), scope=Scope.TRANSIENT)
+```
+
+An application is a list of them:
+
+```python
+MODULES = (use_catalogue, use_orders)
+
+
+def build_container() -> Container:
+    builder = ContainerBuilder()
+    use_application(builder)
+    for module in MODULES:
+        register_module(builder, module)
+    return builder.build()
+```
+
+`use_application` wires the CQRS registries and buses, the API registries, and the registry of
+modules — **once, before any module**. That is the reason this module exists rather than being
+a convention: `use_cqrs` and `use_api` bind unconditionally and a builder refuses a repeat, so
+the second module to wire its own would fail on a duplicate registration naming an internal
+type. Calling them here means a module cannot make that mistake, because it has nothing to
+call.
+
+**One list, however the service runs.** A web application hands the container to `create_app`;
+a worker resolves the buses and processes work. They differ in what they *do* with the modules,
+not in which modules they have — so nothing has to be kept in step, and a capability added for
+one is reachable from the other by construction. The API registries are wired either way: a
+module declares everything it offers, and an application decides which surfaces to expose.
+
+**Modules do not import each other.** One that needs what another provides asks the container
+for it by type — the *contract*, not the class implementing it. So registration order is
+irrelevant, and a module is removed by deleting a line. Nothing declares or checks dependencies
+between modules; leaving one out is reported when the dependency is resolved, with the chain
+naming what was looked for and what asked for it.
+
+```python
+registry = await container.resolve(ModuleRegistry)
+registry.names()  # ("use_catalogue", "use_orders")
+```
 
 ## Development
 

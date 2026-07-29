@@ -48,11 +48,9 @@ jobs:
 
       # Not tests — they assert nothing. They only prove the reference apps still run, which
       # is the one kind of rot type checking cannot catch.
-      - name: Smoke-run the reference apps
+      - name: Smoke-run the reference app
         run: |
-          uv run python -m examples.taskflow
           uv run python -m examples.storefront
-          uv run python -m examples.frontdesk
 
       # The CLI has no terminal here, which is the point: it must print help rather than
       # failing inside curses, and every command must still be reachable by name.
@@ -60,4 +58,4 @@ jobs:
         run: |
           ./dx
           ./dx --help
-          ./dx example list
+          ./dx serve --help
