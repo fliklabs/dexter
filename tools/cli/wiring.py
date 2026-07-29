@@ -10,7 +10,7 @@ from dexter.cli import register_command, use_cli
 from dexter.dependency_injection import Container, ContainerBuilder
 
 from .commands.checks import test, verify
-from .commands.example import list_examples, storefront, taskflow
+from .commands.example import frontdesk, list_examples, storefront, taskflow
 
 
 def build_container() -> Container:
@@ -23,6 +23,7 @@ def build_container() -> Container:
     )
     register_command(builder, taskflow, group="example")
     register_command(builder, storefront, group="example")
+    register_command(builder, frontdesk, group="example")
 
     register_command(builder, test)
     register_command(builder, verify)

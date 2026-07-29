@@ -52,6 +52,7 @@ jobs:
         run: |
           uv run python -m examples.taskflow
           uv run python -m examples.storefront
+          uv run python -m examples.frontdesk
 
       # The CLI has no terminal here, which is the point: it must print help rather than
       # failing inside curses, and every command must still be reachable by name.

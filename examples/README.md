@@ -24,6 +24,7 @@ Every walkthrough accepts `--section` to run one part of it on its own.
 | --- | --- |
 | [`taskflow/`](./taskflow) | A simulated async job service: all three scopes, async factories, disposal, optional dependencies, self-injection, and what a resolution failure reports |
 | [`storefront/`](./storefront) | A CQRS order service: typed commands, queries and events, tickets, correlation, middleware, deferred dispatch, scope settling, and aggregated failures |
+| [`frontdesk/`](./frontdesk) | An HTTP API over a CQRS core: path, query and body binding, headers and cookies, injected identity, middleware, mapped failures, and a container scope per request |
 
 ## taskflow
 
@@ -177,3 +178,66 @@ No section here calls `drain()`. `use_cqrs` binds the scope's `BusGroup` with
 reports whatever failed unredeemed — which is why the last section can catch a `DisposalError`
 from the `async with` itself. The three fire-and-forget dispatches in the deferred section
 complete for the same reason.
+
+## frontdesk
+
+```bash
+uv run python -m examples.frontdesk
+```
+
+A hotel front desk: an HTTP API over a CQRS core, wired by the container. Read
+[`frontdesk/wiring.py`](./frontdesk/wiring.py) first — it is the only file that mentions all
+three modules, and it shows how little joins them.
+
+| File | Holds |
+| --- | --- |
+| `domain.py` | The CQRS messages, the API request and response models, and the abstract contracts |
+| `services.py` | The book, the audit trail, and `current_tenant` — the factory worth reading twice |
+| `handlers.py` | API handlers on one side, command/query/event handlers on the other |
+| `middleware.py` | `RequireTenant`, which refuses a request, and `Trace`, which wraps every one |
+| `wiring.py` | Every binding, in one place |
+| `asgi.py` | Calls the application directly, so the walkthrough needs no server |
+| `display.py` | Output formatting, kept away from the wiring |
+| `__main__.py` | The scripted walkthrough |
+
+**No server is started and no port is bound.** `create_app` returns an ASGI application, and
+`asgi.py` invokes it with the three dictionaries a server would. That is the whole reason the
+library hands back an application instead of running one.
+
+### What the output shows
+
+Each request prints as it is made, then the status and body that came back. The `->` and `<-`
+lines are the `Trace` middleware wrapping every request.
+
+```
+one request model, filled from wherever the path says
+  GET /rooms  ?floor=2&limit=2
+  -> SearchRoomsApi
+  <- SearchRoomsApi
+     200  ["201", "202"]
+  POST /bookings  {"room": "101", "nights": 3}
+  -> BookRoomApi
+  <- BookRoomApi
+     201  {"reference": "BK-001", "room": "101"}  location: /bookings/BK-001
+```
+
+Two sections are worth reading closely.
+
+`identity` books rooms as two different tenants and then prints the audit trail. `Audit` never
+reads a header — it declares `tenant: Tenant`, and `current_tenant` builds one per request from
+the `RequestContext`. That is the pattern to copy when something deep in your graph needs to
+know who is calling; the alternative, a process-wide global, hands one request's caller to
+another under any concurrency at all.
+
+`cqrs` books a room and reads the housekeeping list on the very next line:
+
+```
+  POST /bookings  {"room": "301", "nights": 2}
+     201  {"reference": "BK-004", "room": "301"}
+  housekeeping, read straight after -> ['301']
+```
+
+The API handler dispatched a command and awaited only its result. The event that command's
+handler published was still in flight when it returned — but leaving the request scope settled
+the buses, so the reaction had run before the response was built. `dexter.api` does not import
+`dexter.cqrs` to arrange that: `use_cqrs` binds a `dispose=`, and the container does the rest.

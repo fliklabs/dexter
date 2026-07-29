@@ -17,6 +17,8 @@ import click
 
 from dexter.cli import CliConsole, inject
 from dexter.dependency_injection import Container
+from examples.frontdesk.__main__ import SECTIONS as FRONTDESK_SECTIONS
+from examples.frontdesk.__main__ import main as run_frontdesk
 from examples.storefront.__main__ import SECTIONS as STOREFRONT_SECTIONS
 from examples.storefront.__main__ import main as run_storefront
 from examples.taskflow.__main__ import SECTIONS as TASKFLOW_SECTIONS
@@ -82,3 +84,16 @@ async def taskflow(scope: Container, section: str, with_notifier: bool) -> None:
 async def storefront(scope: Container, section: str) -> None:  # noqa: ARG001 - see above
     """CQRS: commands, queries, events, tickets, settling."""
     await run_storefront(section=section)
+
+
+@click.command("frontdesk")
+@click.option(
+    "--section",
+    type=_sections(tuple(FRONTDESK_SECTIONS)),
+    default=_ALL,
+    help="Run one part of the walkthrough instead of all of it.",
+)
+@inject
+async def frontdesk(scope: Container, section: str) -> None:  # noqa: ARG001 - see above
+    """API: typed handlers, headers, middleware, and a scope per request."""
+    await run_frontdesk(section=section)

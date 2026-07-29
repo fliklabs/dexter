@@ -18,6 +18,7 @@ framework. Read source files directly — there is no external documentation.
 | `dexter.dependency_injection` | Implemented | Async DI container, scopes, resolution |
 | `dexter.cqrs` | Implemented | Commands, queries, events and their buses |
 | `dexter.cli` | Implemented | A keyboard-navigable CLI. Ships no commands — consumers register their own |
+| `dexter.api` | Implemented | Typed request handlers, exposed over HTTP. `dexter.api.http` is the only part that knows a web framework exists |
 | `dexter.application` | Planned | Application composition and wiring |
 | `dexter.caching` | Planned | Cache abstractions |
 | `dexter.observability` | Planned | Tracing and instrumentation |
@@ -234,16 +235,22 @@ Traps when introspecting constructors, every one of them verified:
 `pytest` with `pytest-asyncio` in auto mode for tests. Configuration lives entirely in
 `pyproject.toml`.
 
-**Runtime dependencies: `pydantic>=2.12`, `click>=8.3`, `rich>=14`.** Every one was a
-deliberate decision, because consumers inherit everything declared here — and a module they
-never import still lands in their install. Adding a fourth is the same decision again, not a
-convenience.
+**Runtime dependencies: `pydantic>=2.12`, `click>=8.3`, `rich>=14`, `fastapi>=0.115`.** Every
+one was a deliberate decision, because consumers inherit everything declared here — and a
+module they never import still lands in their install. Adding a fifth is the same decision
+again, not a convenience.
 
 | Dependency | Why | Floor is hard because |
 | --- | --- | --- |
 | `pydantic` | Data types that cross into dexter | Earlier releases have no cp314 `pydantic-core` wheel and fail to build on 3.14 |
 | `click` | `dexter.cli`'s command tree, parsing and help | Nothing older is typed well enough for strict mode |
 | `rich` | `dexter.cli`'s output | — |
+| `fastapi` | `dexter.api`'s routing, validation and schema generation | Pydantic models as query parameters arrived in 0.115.0, and a route whose path names no parameter binds its whole request model that way |
+
+`fastapi` is the one that costs a consumer something they may not want: it brings `starlette`,
+`anyio`, `sniffio` and three smaller packages into an install that only wanted the container.
+That is why `dexter/api/__init__.py` imports none of it and `dexter.api.http` is a package of
+its own — the cost is real, and the boundary is where it is paid.
 
 `curses` costs nothing: it is stdlib. It is also POSIX-only, which is why `dexter.cli` imports
 it lazily and works non-interactively everywhere.

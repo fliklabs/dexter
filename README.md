@@ -22,6 +22,7 @@ drives an event loop on your behalf.
 | `dexter.dependency_injection` | Implemented — container, scopes, async resolution |
 | `dexter.cqrs` | Implemented — commands, queries, events, buses, middleware |
 | `dexter.cli` | Implemented — a keyboard-navigable CLI you register commands into |
+| `dexter.api` | Implemented — typed request handlers, served over HTTP |
 
 ## Install
 
@@ -29,10 +30,11 @@ drives an event loop on your behalf.
 uv add "dexter @ git+https://github.com/fliklabs/dexter"
 ```
 
-Runtime dependencies: `pydantic>=2.12`, `click>=8.3` and `rich>=14`. The pydantic floor is
-hard — earlier releases have no cp314 wheel and fail to build on Python 3.14. `click` and
-`rich` are what `dexter.cli` is built from; modules are imported directly, so a consumer who
-never touches the CLI never imports them.
+Runtime dependencies: `pydantic>=2.12`, `click>=8.3`, `rich>=14` and `fastapi>=0.115`. Two
+floors are hard: earlier pydantic has no cp314 wheel and fails to build on Python 3.14, and
+pydantic models as query parameters arrived in fastapi 0.115. `click` and `rich` are what
+`dexter.cli` is built from and `fastapi` is what `dexter.api.http` is built from; modules are
+imported directly, so a consumer who never touches either never imports them.
 
 Note that importing a framework module costs roughly 45 ms, because pydantic's schema
 machinery loads when the first model is defined. `import dexter` on its own stays free.
@@ -294,6 +296,140 @@ a picker, everything else opens an inline editor — and then shows you the shel
 about to run, which is how the menu teaches its own scriptable form.
 
 Navigation is stdlib `curses`, imported lazily so the module still works where it is absent.
+
+## API
+
+`dexter.api` serves typed request handlers. A handler is an ordinary class with one async
+method: it takes a pydantic model and returns one, and nothing about it says HTTP.
+
+```python
+from http import HTTPMethod
+
+from dexter.api import HttpExposure, RequestContext, register_handler, use_api
+from dexter.api.http import create_app
+from dexter.dependency_injection import ContainerBuilder, Scope
+
+
+class GetRoom(BaseModel):
+    room_id: int
+    verbose: bool = False
+
+
+class GetRoomHandler:
+    """Describe one room."""
+
+    def __init__(self, rooms: RoomStore, context: RequestContext) -> None:
+        self.rooms = rooms
+        self.context = context
+
+    async def handle(self, request: GetRoom) -> RoomView:
+        tenant = self.context.headers.get("x-tenant")
+        return await self.rooms.describe(request.room_id, tenant)
+
+
+builder = ContainerBuilder()
+use_api(builder)
+register_handler(
+    builder,
+    GetRoomHandler,
+    HttpExposure(method=HTTPMethod.GET, path="/rooms/{room_id}", tags=("rooms",)),
+    scope=Scope.TRANSIENT,
+)
+container = builder.build()
+
+app = await create_app(container)
+```
+
+`room_id` is read from the path because the path names it, and `verbose` from the query string
+because nothing else claimed it. Both are validated, coerced and documented by the framework
+underneath, so `/openapi.json` describes them with the constraints declared on the model.
+
+**Headers and cookies arrive by injection, not as an argument.** `handle` takes one parameter,
+exactly as a CQRS handler does; everything else about the invocation lives on a `RequestContext`
+bound `Scope.SCOPED`. That matters most for the code that is not the handler — a repository
+wanting the tenant, an audit service wanting the caller's address — because a container binding
+is reachable from any depth by declaring a parameter:
+
+```python
+def current_tenant(context: RequestContext) -> Tenant:
+    return Tenant(context.headers.get("x-tenant") or "anonymous")
+
+
+builder.register(Tenant).to(current_tenant, scope=Scope.SCOPED)
+# now anything in the graph asks for a `Tenant` and never mentions HTTP
+```
+
+The ambient half is a `contextvars.ContextVar`, never a thread-local: requests share the event
+loop's thread, so a thread-local hands one caller's identity to another request.
+
+**A request is one container scope, and it closes before the response is built.** So everything
+registered with `dispose=` has finished by the time the caller is told anything — including,
+for an application that also called `use_cqrs`, every command a handler dispatched and every
+event those published. `dexter.api` never imports `dexter.cqrs` to arrange that; the container
+does it.
+
+**Middleware is resolved per request and sees no transport type.** It takes an `Invocation` —
+the parsed request, the context, the handler class, the exposure — so one middleware applies
+however a handler is reached. Not calling `call_next` refuses the request, and because
+`Invocation.handler` is the class, a refused request never constructs the handler at all.
+
+```python
+class RequireTenant:
+    async def handle(self, invocation: Invocation, call_next: ApiNext) -> Any:
+        if invocation.context.headers.get("x-tenant") is None:
+            raise NotAuthenticatedError("say who you are")
+        return await call_next(invocation)
+
+
+register_api_middleware(builder, RequireTenant, scope=Scope.SCOPED)
+register_error(builder, NotAuthenticatedError, status=HTTPStatus.UNAUTHORIZED)
+```
+
+`register_error` maps a domain exception — and its subclasses — to a status, served as RFC 9457
+problem details. **An exception nobody mapped is re-raised, not tidied into a 500**, so your
+logging still sees it.
+
+| Where a field comes from | When |
+| --- | --- |
+| The path | The exposure's path names it |
+| The query string | Nothing else claimed it, on a method without a body |
+| The body | Nothing else claimed it, on `POST`, `PUT` or `PATCH` |
+| Nowhere — it is injected | It is on `RequestContext`: headers, cookies, the client address |
+
+**`create_app` lives in `dexter.api.http`, and importing `dexter.api` pulls in no web
+framework.** That split is the seam a second protocol would use: an `Exposure` subclass, a
+package beside `http/`, and the same handlers. A test walks the package and enforces it.
+
+Your entry point starts the loop and owns the container — dexter never does:
+
+```python
+async def main() -> None:
+    container = build_container()
+    app = await create_app(container)
+    try:
+        await uvicorn.Server(uvicorn.Config(app)).serve()
+    finally:
+        await container.aclose()
+
+
+asyncio.run(main())
+```
+
+`create_app` is a coroutine, because every read from a built container is one. So an application
+object cannot be built at import time, and `uvicorn module:app` is not how this is served — the
+six lines above are.
+
+### See it working
+
+```bash
+uv run python -m examples.frontdesk
+```
+
+A hotel front desk over a CQRS core: path, query and body binding, a handler reading a header
+and a cookie, a tenant injected into a service that never mentions HTTP, middleware refusing a
+request, mapped and unmapped failures, and the request scope settling a command's event before
+the response is written. It starts no server — it calls the ASGI application directly. See
+[examples/README.md](./examples/README.md).
 
 ## Development
 

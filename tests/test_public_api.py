@@ -8,6 +8,48 @@ import subprocess
 import sys
 
 import dexter
+from dexter.api import (
+    ApiError,
+    ApiHandler,
+    ApiNotWiredError,
+    ApiPipeline,
+    ApiRegistrationError,
+    ApiRequestError,
+    ApiStateError,
+    Cookie,
+    DuplicateApiMiddlewareError,
+    DuplicateExposureError,
+    DuplicateRouteError,
+    ErrorMap,
+    ErrorMapping,
+    ErrorResponse,
+    Exposure,
+    ExposureRecord,
+    ExposureRegistry,
+    Headers,
+    HttpExposure,
+    InvalidApiHandlerError,
+    InvalidErrorMappingError,
+    InvalidExposureError,
+    Invocation,
+    NoRequestContextError,
+    PayloadSource,
+    QueryValues,
+    RequestContext,
+    ResponseCommittedError,
+    bind_request,
+    current_request,
+    default_payload,
+    describe_source,
+    path_parameters,
+    register_api_middleware,
+    register_error,
+    register_handler,
+    use_api,
+)
+from dexter.api import ApiMiddleware as ApiMiddlewareContract
+from dexter.api import ApiNext as ApiNextContract
+from dexter.api.http import create_app
 from dexter.cli import (
     ACCENT,
     Capture,
@@ -310,4 +352,75 @@ class TestCliSurface:
         )
         assert result.stdout.strip() == "False", (
             "importing dexter.cli pulled in curses, which is not available everywhere"
+        )
+
+
+class TestApiSurface:
+    def test_the_handler_and_middleware_contracts_are_exported(self) -> None:
+        assert {ApiHandler, ApiMiddlewareContract, ApiNextContract, Invocation}
+
+    def test_the_request_context_and_its_value_types_are_exported(self) -> None:
+        assert {RequestContext, Headers, QueryValues, Cookie}
+        assert {bind_request, current_request}
+
+    def test_the_exposure_types_are_exported(self) -> None:
+        # The protocol seam: a second transport subclasses `Exposure` and asks the registry
+        # for its own kind.
+        assert issubclass(HttpExposure, Exposure)
+        assert {PayloadSource, path_parameters, default_payload, describe_source}
+
+    def test_the_wiring_entry_points_are_exported(self) -> None:
+        assert {use_api, register_handler, register_api_middleware, register_error}
+
+    def test_the_registries_and_pipeline_are_exported(self) -> None:
+        # Named with an `Api` prefix where `dexter.cqrs` already owns the plain name, so an
+        # application wiring both can import them into one file.
+        assert {ExposureRegistry, ExposureRecord, ErrorMap, ErrorMapping, ApiPipeline}
+
+    def test_the_error_body_is_exported(self) -> None:
+        assert set(ErrorResponse.model_fields) == {"title", "status", "detail"}
+
+    def test_every_error_is_exported(self) -> None:
+        errors = {
+            ApiError,
+            ApiNotWiredError,
+            ApiRegistrationError,
+            ApiRequestError,
+            ApiStateError,
+            DuplicateApiMiddlewareError,
+            DuplicateExposureError,
+            DuplicateRouteError,
+            InvalidApiHandlerError,
+            InvalidErrorMappingError,
+            InvalidExposureError,
+            NoRequestContextError,
+            ResponseCommittedError,
+        }
+        assert all(issubclass(error, ApiError) for error in errors)
+        assert issubclass(ApiError, DexterError)
+
+    def test_the_payload_sources_follow_the_enum_convention(self) -> None:
+        assert all(source.value == source.name for source in PayloadSource)
+        assert describe_source(PayloadSource.BODY) == "PayloadSource.BODY"
+
+    def test_the_application_builder_lives_in_the_http_adapter(self) -> None:
+        """`create_app` is deliberately not re-exported from `dexter.api`."""
+        assert not hasattr(dexter.api, "create_app")
+        assert create_app.__module__.startswith("dexter.api.http")
+
+    def test_importing_the_api_does_not_import_a_web_framework(self) -> None:
+        """The core is transport-agnostic; `dexter.api.http` is where the framework lives."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, dexter.api; "
+                "print(any(m in sys.modules for m in ('fastapi', 'starlette')))",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "False", (
+            "importing dexter.api pulled in a web framework; the seam has been broken"
         )
