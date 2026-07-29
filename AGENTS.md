@@ -17,6 +17,7 @@ framework. Read source files directly — there is no external documentation.
 | `dexter.commons` | Scaffolded | Shared primitives; root of the exception hierarchy |
 | `dexter.dependency_injection` | Implemented | Async DI container, scopes, resolution |
 | `dexter.cqrs` | Implemented | Commands, queries, events and their buses |
+| `dexter.cli` | Implemented | A keyboard-navigable CLI. Ships no commands — consumers register their own |
 | `dexter.application` | Planned | Application composition and wiring |
 | `dexter.caching` | Planned | Cache abstractions |
 | `dexter.observability` | Planned | Tracing and instrumentation |
@@ -233,9 +234,19 @@ Traps when introspecting constructors, every one of them verified:
 `pytest` with `pytest-asyncio` in auto mode for tests. Configuration lives entirely in
 `pyproject.toml`.
 
-**Runtime dependencies: `pydantic>=2.12` only.** The floor is hard — earlier releases have no
-cp314 `pydantic-core` wheel and fail to build on 3.14. Adding a second runtime dependency is a
-deliberate decision, not a convenience; consumers inherit everything declared here.
+**Runtime dependencies: `pydantic>=2.12`, `click>=8.3`, `rich>=14`.** Every one was a
+deliberate decision, because consumers inherit everything declared here — and a module they
+never import still lands in their install. Adding a fourth is the same decision again, not a
+convenience.
+
+| Dependency | Why | Floor is hard because |
+| --- | --- | --- |
+| `pydantic` | Data types that cross into dexter | Earlier releases have no cp314 `pydantic-core` wheel and fail to build on 3.14 |
+| `click` | `dexter.cli`'s command tree, parsing and help | Nothing older is typed well enough for strict mode |
+| `rich` | `dexter.cli`'s output | — |
+
+`curses` costs nothing: it is stdlib. It is also POSIX-only, which is why `dexter.cli` imports
+it lazily and works non-interactively everywhere.
 
 **dexter is async-native.** No synchronous entry points, no async↔sync wrappers, and nothing in
 the library drives an event loop (`asyncio.run`, `run_until_complete`) on a caller's behalf.
@@ -291,6 +302,18 @@ to prevent:
 
 `ANN` is also omitted, as redundant with mypy strict's `disallow_untyped_defs`.
 
+## Repository tooling
+
+`tools/` at the repo root holds this repository's own CLI, built on `dexter.cli`. It is outside
+`dexter/`, so the wheel whitelist keeps it out of the distribution exactly as it does `tests/`
+and `examples/`. Its entry point is `./dx`, a launcher in the same shape as `./verify.sh`.
+
+`./dx` and `./verify.sh` are not rivals. `verify.sh` is the gate, is what CI runs, and is
+unchanged by any of this; `./dx test` is the feedback loop, and reports pass rate, timing and
+coverage that the gate does not. `./dx verify` just shells out to the gate.
+
+**`tools/**/*.py` ignores `T20` only.** Writing to a terminal is the whole job.
+
 ## Examples
 
 Runnable reference applications live in `examples/` at the repo root — never inside `dexter/`,
@@ -342,6 +365,24 @@ deliberately passes a wrong type, bind the value to an `Any`-typed local rather 
 
 **Must have tests:** anything that rejects input or state, error paths, non-trivial
 branching. **No tests needed:** re-export lines, trivial data holders.
+
+### Coverage: 90%, enforced
+
+`verify.sh` measures coverage and fails below the floor in `pyproject.toml`, so CI fails below
+it. It is a gate, not a dashboard.
+
+90 is chosen to be high enough to mean something and low enough that one unreachable branch of
+an error path does not hold up a change. Two things follow from it:
+
+- **A bare `uv run pytest` measures nothing.** Running one module's tests stays fast, and only
+  the full gate checks the floor — a subset of the suite cannot meet a whole-project number.
+- **Code that is genuinely hard to test gets restructured, not excused.** There are no
+  `# pragma: no cover` markers in this repository. When `dexter.cli` sat at 61% because its
+  drawing needed a terminal, the fix was to separate the decisions from the drawing
+  (`interactive/menu.py`) and drive the rest through a fake window
+  (`tests/cli/screen.py`) — which then found a real bug in how ESC left a submenu.
+
+`./dx test` reports the same number per module and says whether the floor was met.
 
 ## Maintaining this file
 

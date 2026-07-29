@@ -2,9 +2,11 @@
 #
 # Single verification entry point. Local runs and CI run exactly these checks.
 #
-#   ./verify.sh          format check, lint, type-check, test
+#   ./verify.sh          format check, lint, type-check, test with coverage
 #   ./verify.sh --fix    format and autofix in place, then type-check and test
 #   ./verify.sh -v       stream all output (CI uses this)
+#
+# The test step measures coverage and fails below the floor in pyproject.toml.
 #
 set -euo pipefail
 
@@ -85,7 +87,7 @@ else
 fi
 
 run_check "types: mypy --strict" uv run mypy
-run_check "tests: pytest" uv run pytest
+run_check "tests: pytest" uv run pytest --cov --cov-report=term-missing
 
 echo ""
 echo "=============================="

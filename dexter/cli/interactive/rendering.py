@@ -44,20 +44,31 @@ def terminal() -> Iterator[Any]:
         # `raw` rather than `cbreak` alone so Ctrl+C arrives as a key. Otherwise Python
         # raises `KeyboardInterrupt` from inside a draw and the terminal is left in raw mode.
         curses.raw()
-        curses.curs_set(0)
+        show_cursor(visible=False)
         with contextlib.suppress(curses.error):
             curses.start_color()
             curses.use_default_colors()
         screen.keypad(True)
         yield screen
     finally:
-        with contextlib.suppress(curses.error):
-            curses.curs_set(1)
+        # Restoration must happen whatever went wrong above. A terminal left in raw mode with
+        # no cursor is one the user has to `reset` by hand, and they will not know why.
+        show_cursor(visible=True)
         screen.keypad(False)
         curses.noraw()
         curses.nocbreak()
         curses.echo()
         curses.endwin()
+
+
+def show_cursor(*, visible: bool) -> None:
+    """Show or hide the cursor, tolerating a terminal that cannot.
+
+    `curs_set` raises on a terminal without the capability, and losing the whole menu over a
+    cosmetic detail would be a poor trade.
+    """
+    with contextlib.suppress(curses.error):
+        curses.curs_set(1 if visible else 0)
 
 
 def write(screen: Any, row: int, column: int, text: str, attribute: int = 0) -> None:

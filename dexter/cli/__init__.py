@@ -47,10 +47,10 @@ from .models import describe_kind as describe_kind
 from .models import help_text as help_text
 from .models import read_fields as read_fields
 from .models import shell_command as shell_command
-from .tree import CommandTree as CommandTree
 from .runner import Capture as Capture
 from .runner import Outcome as Outcome
 from .runner import invoke as invoke
+from .tree import CommandTree as CommandTree
 from .use import inject as inject
 from .use import register_command as register_command
 from .use import use_cli as use_cli

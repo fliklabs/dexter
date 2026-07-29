@@ -18,6 +18,7 @@ from .rendering import (
     footer,
     header,
     read_key,
+    show_cursor,
     write,
 )
 
@@ -30,10 +31,13 @@ _PRINTABLE = range(32, 127)
 
 
 def list_screen(screen: Any, menu: Menu) -> bool:
-    """Draw the open group until the user picks a row or goes back.
+    """Draw the open group until the user picks a row or leaves the menu entirely.
 
-    Returns True when something was selected — the menu has already opened it if it was a
-    group — and False to go back a level.
+    Returns True when something was selected, and False only when the user wants to leave.
+
+    Going back is handled here rather than reported upwards, and that is load-bearing: the
+    caller cannot tell "went back to the root" from "left from the root" once the level has
+    been popped, so returning for both closed the menu when the user meant to go up one.
     """
     pending_escape = False
 
@@ -76,7 +80,7 @@ def list_screen(screen: Any, menu: Menu) -> bool:
         if key == ESC:
             if not menu.at_root:
                 menu.back()
-                return False
+                continue
             if pending_escape:
                 return False
             # One ESC at the root is far more often a mistyped "back" than an intent to
@@ -258,7 +262,7 @@ def _edit(screen: Any, field: Field, values: dict[str, str], row: int) -> str:
 def _inline_edit(screen: Any, row: int, prefix: str, initial: str) -> str | None:
     """A one-line editor drawn over the field's own row. Returns None if cancelled."""
     text = initial
-    curses.curs_set(1)
+    show_cursor(visible=True)
     try:
         while True:
             _, width = screen.getmaxyx()
@@ -277,4 +281,4 @@ def _inline_edit(screen: Any, row: int, prefix: str, initial: str) -> str | None
             elif key in _PRINTABLE:
                 text += chr(key)
     finally:
-        curses.curs_set(0)
+        show_cursor(visible=False)

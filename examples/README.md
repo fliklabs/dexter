@@ -10,6 +10,16 @@ with the API, but nothing in the test suite executes them.
 
 They are not shipped in the wheel, so nothing here affects what a consumer installs.
 
+Run one directly, or pick it from the repository CLI:
+
+```bash
+./dx example list             # what exists
+./dx example storefront       # run it
+./dx                          # or choose from the menu
+```
+
+Every walkthrough accepts `--section` to run one part of it on its own.
+
 | Example | Shows |
 | --- | --- |
 | [`taskflow/`](./taskflow) | A simulated async job service: all three scopes, async factories, disposal, optional dependencies, self-injection, and what a resolution failure reports |

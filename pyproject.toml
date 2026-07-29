@@ -147,6 +147,22 @@ warn_unreachable = true
 files = ["dexter", "tests", "examples", "tools"]
 enable_error_code = ["redundant-expr", "possibly-undefined", "truthy-bool"]
 
+# ───────────────────────────── coverage ──────────────────────────────
+# The floor is enforced, not aspirational: `verify.sh` measures coverage and fails below it,
+# so CI fails below it. 90 is high enough to mean something and low enough that the last
+# unreachable branch of an error path does not hold up a change.
+#
+# A bare `uv run pytest` measures nothing, so running one module's tests stays fast and
+# unguarded — only the full gate checks the floor.
+[tool.coverage.run]
+source = ["dexter"]
+branch = false
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false
+
 # ────────────────────────────── pytest ───────────────────────────────
 [tool.pytest.ini_options]
 minversion = "8.0"

@@ -58,9 +58,7 @@ async def navigate(
         try:
             while True:
                 if not list_screen(screen, menu):
-                    if menu.at_root:
-                        return exit_code
-                    continue
+                    return exit_code
 
                 command = menu.enter()
                 if command is None:

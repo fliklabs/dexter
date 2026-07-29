@@ -52,3 +52,11 @@ jobs:
         run: |
           uv run python -m examples.taskflow
           uv run python -m examples.storefront
+
+      # The CLI has no terminal here, which is the point: it must print help rather than
+      # failing inside curses, and every command must still be reachable by name.
+      - name: Smoke-run the CLI
+        run: |
+          ./dx
+          ./dx --help
+          ./dx example list

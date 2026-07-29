@@ -312,6 +312,9 @@ uv run pytest tests/cqrs      # run one module's tests
 `./verify.sh` is the gate and is what CI runs; `./dx test` is the feedback loop and reports the
 statistics the gate does not. `./dx verify` runs the gate.
 
+The gate measures coverage and **fails below 90%**. A bare `uv run pytest` does not, so running
+one module's tests stays fast.
+
 A change is not finished until `./verify.sh` exits 0.
 
 See [AGENTS.md](./AGENTS.md) for repository structure and conventions.

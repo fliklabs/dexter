@@ -12,6 +12,7 @@ report, which changes between releases and is the wrong thing to build on.
 import asyncio
 import json
 import tempfile
+import tomllib
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -24,6 +25,17 @@ from ..paths import REPO_ROOT, VERIFY
 
 _SLOWEST = 5
 """How many of the slowest tests to list. Enough to spot a problem, few enough to skim."""
+
+
+def coverage_floor() -> float:
+    """The minimum coverage this repository accepts.
+
+    Read from `pyproject.toml` rather than repeated here: `verify.sh` enforces the same number
+    through coverage itself, and two copies would eventually disagree.
+    """
+    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    report = config.get("tool", {}).get("coverage", {}).get("report", {})
+    return float(report.get("fail_under", 0))
 
 
 class Results:
@@ -72,12 +84,20 @@ async def test(scope: Container, coverage: bool, path: str, selector: str) -> in
         junit = Path(directory) / "results.xml"
         coverage_file = Path(directory) / "coverage.json"
 
+        whole_suite = path == "tests" and not selector
         command = ["uv", "run", "pytest", path, f"--junitxml={junit}", "-q"]
         if selector:
             command.extend(["-k", selector])
         if coverage:
             command.extend(
-                ["--cov=dexter", f"--cov-report=json:{coverage_file}", "--cov-report="]
+                [
+                    "--cov=dexter",
+                    f"--cov-report=json:{coverage_file}",
+                    "--cov-report=",
+                    # The floor is judged below so it can be reported properly. A subset of
+                    # the suite cannot meet a whole-project floor anyway.
+                    "--cov-fail-under=0",
+                ]
             )
 
         console.detail(f"$ {' '.join(command)}")
@@ -85,8 +105,8 @@ async def test(scope: Container, coverage: bool, path: str, selector: str) -> in
 
         results = _read_junit(junit)
         _report(console, results)
-        if coverage:
-            _report_coverage(console, coverage_file)
+        if coverage and not _report_coverage(console, coverage_file, whole_suite):
+            exit_code = exit_code or 1
 
     return exit_code
 
@@ -197,11 +217,11 @@ def _report(console: CliConsole, results: Results) -> None:
         console.print(slowest)
 
 
-def _report_coverage(console: CliConsole, report: Path) -> None:
-    """Render coverage overall and per module."""
+def _report_coverage(console: CliConsole, report: Path, whole_suite: bool) -> bool:
+    """Render coverage overall and per module. Returns whether the floor was met."""
     if not report.is_file():
         console.warn("No coverage report was produced.")
-        return
+        return True
 
     data = json.loads(report.read_text(encoding="utf-8"))
     total = float(data.get("totals", {}).get("percent_covered", 0.0))
@@ -217,6 +237,18 @@ def _report_coverage(console: CliConsole, report: Path) -> None:
         )
     console.print(table)
     console.print(f"  [bold]total[/]  {_percentage(total)}")
+
+    floor = coverage_floor()
+    if not whole_suite:
+        console.detail(
+            f"floor of {floor:.0f}% not checked: this was not the whole suite"
+        )
+        return True
+    if total < floor:
+        console.error(f"coverage is below the floor of {floor:.0f}%")
+        return False
+    console.ok(f"coverage is above the floor of {floor:.0f}%")
+    return True
 
 
 def _by_module(data: dict[str, object]) -> dict[str, dict[str, float]]:
@@ -250,6 +282,7 @@ def _by_module(data: dict[str, object]) -> dict[str, dict[str, float]]:
 
 
 def _percentage(value: float) -> str:
-    """Colour a percentage by how comfortable it is."""
-    colour = "green" if value >= 90 else "yellow" if value >= 75 else "red"  # noqa: PLR2004
+    """Colour a percentage against the floor, so the table says what the rule says."""
+    floor = coverage_floor()
+    colour = "green" if value >= floor else "yellow" if value >= floor - 15 else "red"
     return f"[{colour}]{value:.1f}%[/]"

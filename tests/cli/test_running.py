@@ -183,7 +183,7 @@ class TestInjection:
         assert seen[0] is not seen[1]
 
     async def test_inject_outside_the_cli_says_so(self) -> None:
-        with pytest.raises(CliNotWiredError, match="dexter.cli.run"):
+        with pytest.raises(CliNotWiredError, match=r"dexter\.cli\.run"):
             await greet.callback(name="x", shout=False)  # type: ignore[misc]
 
 
