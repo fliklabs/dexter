@@ -11,6 +11,7 @@ from dexter.dependency_injection import Container, ContainerBuilder
 
 from .commands.checks import test, verify
 from .commands.example import frontdesk, list_examples, storefront, taskflow
+from .commands.serve import serve
 
 
 def build_container() -> Container:
@@ -25,6 +26,7 @@ def build_container() -> Container:
     register_command(builder, storefront, group="example")
     register_command(builder, frontdesk, group="example")
 
+    register_command(builder, serve)
     register_command(builder, test)
     register_command(builder, verify)
 

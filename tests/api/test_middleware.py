@@ -160,7 +160,43 @@ class TestShortCircuiting:
 
         assert seen == [GetRoomHandler]
 
-    async def test_refusing_by_raising_a_mapped_exception(
+    async def test_what_it_returns_must_satisfy_the_route_it_refused(
+        self, rooms: ContainerBuilder
+    ) -> None:
+        """The trap in refusing by returning: the response model is still the handler's.
+
+        A middleware guarding one handler can return that handler's response. One guarding
+        several cannot, because each declares something different — and whatever it returns is
+        serialised through whichever route it happened to refuse.
+        """
+        register_api_middleware(rooms, ShortCircuit, scope=Scope.SCOPED)
+        async with serving(rooms, raise_app_exceptions=False) as client:
+            fits = await client.get("/rooms/1")  # declares RoomView
+            clashes = await client.get("/rooms")  # declares list[str]
+
+        assert fits.status_code == HTTPStatus.OK
+        assert clashes.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+
+    async def test_raising_refuses_every_route_whatever_it_returns(
+        self, rooms: ContainerBuilder
+    ) -> None:
+        """Which is why a middleware that spans handlers should refuse by raising."""
+
+        class Forbid:
+            async def handle(self, invocation: Invocation, call_next: ApiNext) -> Any:
+                raise RoomUnavailableError("not for you")
+
+        register_error(rooms, RoomUnavailableError, status=HTTPStatus.FORBIDDEN)
+        register_api_middleware(rooms, Forbid, scope=Scope.SCOPED)
+        async with serving(rooms) as client:
+            view = await client.get("/rooms/1")  # declares RoomView
+            listing = await client.get("/rooms")  # declares list[str]
+
+        assert view.status_code == HTTPStatus.FORBIDDEN
+        assert listing.status_code == HTTPStatus.FORBIDDEN
+        assert listing.json()["detail"] == "not for you"
+
+    async def test_a_refusal_by_raising_carries_its_message(
         self, rooms: ContainerBuilder
     ) -> None:
         class Forbid:

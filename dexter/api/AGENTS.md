@@ -74,6 +74,22 @@ could not know which handler was about to run.
 **Streaming is consequently unsupported**, and declining it is deliberate: a streaming body is
 produced after the endpoint returns, when the scope is already closed.
 
+## Refusing by returning is a trap for middleware that spans handlers
+
+Not calling `call_next` short-circuits the request, and **whatever the middleware returns is
+still serialised through the response model of whichever route it refused.** For a middleware
+guarding one handler that is fine. For one registered against every handler it cannot work:
+each declares something different, so a value that fits one route is an invalid response on the
+next, and the caller gets a 500 about response validation rather than the refusal that was
+meant.
+
+**A middleware that spans handlers should refuse by raising a mapped exception.** The mapping
+produces the response, so it fits every route regardless of what each returns.
+`examples/frontdesk`'s `RequireTenant` is the worked example, and it got this wrong first:
+returning a `Whoami` answered `GET /whoami` correctly and made `GET /rooms` — which declares
+`list[str]` — fail with four validation errors, one per field of the model it was handed.
+`tests/api/test_middleware.py` pins both halves.
+
 ## `Invocation.handler` is the class, not an instance
 
 So a middleware that refuses a request never constructs the handler or anything it depends on —

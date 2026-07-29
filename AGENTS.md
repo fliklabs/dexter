@@ -319,6 +319,13 @@ and `examples/`. Its entry point is `./dx`, a launcher in the same shape as `./v
 unchanged by any of this; `./dx test` is the feedback loop, and reports pass rate, timing and
 coverage that the gate does not. `./dx verify` just shells out to the gate.
 
+**`./dx serve` is the only thing in this repository that binds a port.** It puts all three
+reference applications behind one address so they can be poked from a browser, and it lives in
+`tools/` rather than `examples/` for one reason: CI smoke-runs every example with no timeout,
+and a server would hang it. The examples themselves still terminate. Its `uvicorn` dependency
+is in the `tools` group, never in `[project.dependencies]` — `dexter.api` hands back an ASGI
+application and never runs one, so a consumer inherits no server from us.
+
 **`tools/**/*.py` ignores `T20` only.** Writing to a terminal is the whole job.
 
 ## Examples

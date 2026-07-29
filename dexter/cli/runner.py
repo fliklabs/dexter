@@ -12,6 +12,7 @@ Run from the menu, a `Capture` redirects it into a buffer that repaints a curses
 write — the command cannot tell the difference.
 """
 
+import asyncio
 import contextlib
 import inspect
 import io
@@ -124,6 +125,12 @@ async def _await(result: Any) -> int:
         error.show()
         return int(error.exit_code)
     except click.exceptions.Abort, KeyboardInterrupt:
+        return ABORTED
+    except asyncio.CancelledError:
+        # The user stopped it, so this is an outcome rather than a failure — and swallowing
+        # the cancellation is deliberate, for the same reason `SystemExit` is swallowed below.
+        # It also means the caller still gets everything the command printed before it was
+        # stopped, which is the part worth reading.
         return ABORTED
     except SystemExit as exiting:
         # Swallowed rather than allowed through: a command raising `SystemExit(1)` must not

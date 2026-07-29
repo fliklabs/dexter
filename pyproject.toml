@@ -55,7 +55,16 @@ include = [
 ]
 
 [dependency-groups]
-dev = [{ include-group = "test" }, { include-group = "lint" }]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+    { include-group = "tools" },
+]
+# `./dx serve` binds a port so the reference applications can be poked from a browser. It is
+# the only thing in this repository that starts a server, and it lives here rather than in
+# `[project.dependencies]` deliberately: `dexter.api` hands back an ASGI application and never
+# runs one, so a consumer inherits no server from us.
+tools = ["uvicorn>=0.34"]
 test = [
     # `httpx` drives the ASGI app in-process, with no socket and no server. fastapi's own
     # `TestClient` is synchronous and runs the app on a portal thread, which would defeat the

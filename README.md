@@ -373,6 +373,11 @@ the parsed request, the context, the handler class, the exposure — so one midd
 however a handler is reached. Not calling `call_next` refuses the request, and because
 `Invocation.handler` is the class, a refused request never constructs the handler at all.
 
+**Refuse by raising, not by returning**, whenever the middleware guards more than one handler.
+Whatever it returns is still serialised through the response model of the route it refused, so
+a value that suits one route is an invalid response on the next. A mapped exception produces
+the response itself and therefore fits all of them:
+
 ```python
 class RequireTenant:
     async def handle(self, invocation: Invocation, call_next: ApiNext) -> Any:

@@ -132,6 +132,10 @@ class Whoami(BaseModel):
 # ── contracts ────────────────────────────────────────────────────────
 
 
+class NotAuthenticatedError(Exception):
+    """The caller did not say who they are."""
+
+
 class NoSuchBookingError(Exception):
     """No booking has that reference."""
 

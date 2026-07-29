@@ -26,6 +26,34 @@ Every walkthrough accepts `--section` to run one part of it on its own.
 | [`storefront/`](./storefront) | A CQRS order service: typed commands, queries and events, tickets, correlation, middleware, deferred dispatch, scope settling, and aggregated failures |
 | [`frontdesk/`](./frontdesk) | An HTTP API over a CQRS core: path, query and body binding, headers and cookies, injected identity, middleware, mapped failures, and a container scope per request |
 
+## Serving all three at once
+
+```bash
+./dx serve            # http://127.0.0.1:8000/docs
+```
+
+The walkthroughs print; this one listens. `./dx serve` puts every example behind one address so
+you can send it real requests from a browser — one Swagger UI covering all of them, with each
+example under its own prefix:
+
+| Prefix | What it shows over HTTP |
+| --- | --- |
+| `/taskflow` | `dexter.api` over plain dependency injection, with no CQRS anywhere. `GET /taskflow/scope` reports the singleton pool every request shares next to the scoped repository each request gets its own of |
+| `/storefront` | Endpoints that are pure translation — request in, command or query onto a bus, result out. `POST /storefront/orders` returns what the warehouse had reserved *by the time the response was built*, which is the event settling before the caller is answered |
+| `/frontdesk` | The full picture: headers, cookies, injected identity, middleware and mapped failures |
+
+**They are three separate containers, not one.** `use_cqrs` binds its registries
+unconditionally and a builder refuses a repeat, so two examples that both use CQRS could never
+share one — and do not need to. `create_app` takes an application and a prefix, so each keeps
+its own `wiring.py`, readable on its own, and the routes land side by side under one schema.
+
+Ctrl+C stops it. From the menu that is a confirm modal and you land back in the CLI; from a
+shell it is an ordinary interrupt.
+
+`storefront` and `taskflow` grow their HTTP edge only when asked — `build_container(with_api=True)`,
+which `./dx serve` passes and the walkthroughs do not. Their `api.py` is worth reading for how
+little it takes to put an API in front of something that already works.
+
 ## taskflow
 
 ```bash
@@ -40,6 +68,7 @@ an application on dexter should be:
 | --- | --- |
 | `domain.py` | Data and abstract contracts — the types used as container keys. Knows nothing about dexter |
 | `services.py` | Implementations, and the things that do the work |
+| `api.py` | The HTTP edge, added only when `build_container(with_api=True)` asks for it |
 | `wiring.py` | Every binding, in one place |
 | `display.py` | Output formatting, kept away from the wiring |
 | `__main__.py` | The scripted walkthrough |
@@ -121,6 +150,7 @@ wired and every handler registered, and it is the file worth copying into a real
 | `services.py` | Implementations, plus the scoped context that lets a handler correlate what it emits |
 | `handlers.py` | One class per message, each with a single async `handle` |
 | `middleware.py` | Cross-cutting concerns, applied to all three buses |
+| `api.py` | The HTTP edge, added only when `build_container(with_api=True)` asks for it |
 | `wiring.py` | `use_cqrs`, then every handler and middleware, in one place |
 | `display.py` | Output formatting, kept away from the wiring |
 | `__main__.py` | The scripted walkthrough |

@@ -210,6 +210,62 @@ class TestValidation:
         assert bad.status_code == HTTPStatus.UNPROCESSABLE_CONTENT
 
 
+class TestNoBody:
+    async def test_a_handler_serving_nothing_can_use_a_bodyless_status(
+        self, builder: ContainerBuilder
+    ) -> None:
+        """`-> None` with 204 is the obvious thing to write, so it has to work.
+
+        Passing the annotation through as a response model would describe a body, and the
+        framework refuses to pair that with a status that forbids one.
+        """
+
+        class Forget(BaseModel):
+            room_id: int
+
+        class ForgetHandler:
+            async def handle(self, request: Forget) -> None:
+                return None
+
+        register_handler(
+            builder,
+            ForgetHandler,
+            HttpExposure(
+                method=HTTPMethod.DELETE,
+                path="/rooms/{room_id}",
+                status=HTTPStatus.NO_CONTENT,
+            ),
+            scope=Scope.TRANSIENT,
+        )
+        async with serving(builder) as client:
+            response = await client.delete("/rooms/1")
+
+        assert response.status_code == HTTPStatus.NO_CONTENT
+        assert response.text == ""
+
+    async def test_a_handler_serving_nothing_still_works_with_a_normal_status(
+        self, builder: ContainerBuilder
+    ) -> None:
+        class Ping(BaseModel):
+            pass
+
+        class PingHandler:
+            async def handle(self, request: Ping) -> None:
+                return None
+
+        register_handler(
+            builder,
+            PingHandler,
+            HttpExposure(method=HTTPMethod.GET, path="/ping"),
+            scope=Scope.TRANSIENT,
+        )
+        async with serving(builder) as client:
+            response = await client.get("/ping")
+
+        assert response.status_code == HTTPStatus.OK
+        assert response.json() is None
+
+
 class TestSchema:
     async def test_documents_path_and_query_parameters_separately(
         self, rooms: ContainerBuilder

@@ -93,14 +93,19 @@ async def show_middleware(app: Application, container: Container) -> None:  # no
     request("GET", "/whoami", "no X-Tenant header")
     answer = await call(app, "GET", "/whoami")
     reply(answer.status, answer.body)
+    note("RequireTenant refused before `call_next`, so WhoamiApi never ran — and was")
     note(
-        "RequireTenant returned instead of calling `call_next`, so WhoamiApi never ran"
+        "never even constructed: `Invocation.handler` is the class, and the container is"
     )
-    note("and was never even constructed — `Invocation.handler` is the class, and the")
-    note("container is only asked for an instance if the pipeline reaches the end.")
-    note(
-        "Trace still printed both halves: it is registered first, so it wraps the refusal."
-    )
+    note("only asked for an instance if the pipeline reaches the end.")
+
+    request("GET", "/rooms", "no X-Tenant header either")
+    answer = await call(app, "GET", "/rooms")
+    reply(answer.status, answer.body)
+    note("The same refusal, on a route that returns `list[str]` rather than an object.")
+    note("That is why RequireTenant *raises* a mapped exception rather than returning")
+    note("something: it guards every route, and anything it returned would still be")
+    note("serialised through whatever that route declared. A mapping answers for all.")
 
 
 async def show_errors(app: Application, container: Container) -> None:  # noqa: ARG001

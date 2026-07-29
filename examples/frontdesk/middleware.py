@@ -10,28 +10,33 @@ after validation, inside the request's container scope, with its dependencies in
 is what makes it able to refuse a request on a domain rule.
 """
 
-from http import HTTPStatus
 from typing import Any
 
 from dexter.api import ApiNext, Invocation
 
 from .display import line
-from .domain import Whoami
+from .domain import NotAuthenticatedError
 
 
 class RequireTenant:
     """Refuses a request that does not say who it is for.
 
-    Refusing means returning something instead of calling `call_next` — the handler is never
-    constructed and never runs. Raising a mapped exception is the other way; this one shows
-    that a middleware can answer on its own.
+    **It refuses by raising, and that is the part worth copying.** A middleware can also refuse
+    by returning something instead of calling `call_next`, and for a middleware that guards one
+    handler that is fine. This one guards every route, and whatever it returns is still
+    serialised through *that route's* declared response model — so returning, say, a `Whoami`
+    would answer `GET /rooms` (which declares `list[str]`) with an object, and the framework
+    would reject it as an invalid response rather than a refused request.
+
+    Raising an exception that has been mapped to a status sidesteps that entirely: the mapping
+    produces the response, so it fits every route the middleware covers no matter what each one
+    returns.
     """
 
     async def handle(self, invocation: Invocation, call_next: ApiNext) -> Any:
-        """Let the request through if it named a tenant, and answer it if it did not."""
+        """Let the request through if it named a tenant, and refuse it if it did not."""
         if invocation.context.headers.get("x-tenant") is None:
-            invocation.context.set_status(HTTPStatus.UNAUTHORIZED)
-            return Whoami(tenant="unknown", session=None, address=None, user_agent=None)
+            raise NotAuthenticatedError("requests must carry an X-Tenant header")
         return await call_next(invocation)
 
 

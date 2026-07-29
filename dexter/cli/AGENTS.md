@@ -54,6 +54,32 @@ path**. Anything reachable by hand is reachable from a script, which is why ever
 declared click parameter rather than a passthrough — an option the CLI cannot see is an option
 the form cannot draw.
 
+## A running command is watched, not awaited
+
+`navigator._run` starts the command as a task and polls the screen around it, with the window
+in `nodelay` for the duration. Awaiting it directly — which is what this did first — means the
+one thread there is sits inside `getch` for as long as the command lasts, so no key is read,
+Ctrl+C cannot be delivered, and anything that does not finish on its own can never be stopped
+without killing the terminal.
+
+Three details are load-bearing, and each has a test:
+
+- **The command gets its turn first.** The loop is `await asyncio.wait({task}, timeout=_TICK)`
+  and only polls if that times out. `asyncio.wait` returns the moment the task finishes, so a
+  command that ends immediately never reaches the poll — and must not, because a key read
+  while watching is a key *swallowed*, and it would be the keystroke meant for the screen
+  that follows.
+- **The modal does not own the loop.** `Modal` is drawing plus one key step, so the question
+  "stop this?" is drawn from inside the poll loop and the command keeps running while it sits
+  there. Stopping something must not require it to already be stopped.
+- **`runner._await` swallows `CancelledError`** and reports `ABORTED`, for the same reason it
+  swallows `SystemExit`: the menu holds the terminal, and it also means the output the command
+  produced before it was stopped still reaches the final pane.
+
+`tests/cli/screen.py`'s fake window returns `curses.ERR` rather than raising `OutOfKeysError`
+while `nodelay` is on. Both halves matter: a *blocking* read that runs out still means a screen
+failed to return, which is the bug that error exists to catch.
+
 ## Menu state is separate from menu drawing
 
 `interactive/menu.py` holds every decision — the stack, the per-level cursor, what a selection
@@ -92,3 +118,7 @@ groups, not a flat map.
 
 Shell completion, and a non-interactive `--json` output mode. Both are additive: the command
 tree already describes everything either would need.
+
+Leaving a command running in the background and returning to the menu. The watch loop is where
+it would go, but the container scope, the output and the stopping of it all need an owner that
+outlives one screen, and nothing needs it yet. Interrupting is enough.

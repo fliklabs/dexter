@@ -19,6 +19,7 @@ from dexter.cqrs import (
 )
 from dexter.dependency_injection import Container, ContainerBuilder, Scope
 
+from .api import register_api
 from .domain import CancelOrder, GetOrder, OrderBook, OrderPlaced, PlaceOrder
 from .handlers import (
     CancelOrderHandler,
@@ -32,13 +33,17 @@ from .middleware import Correlate, Tracing
 from .services import DispatchContext, InMemoryOrderBook, Warehouse
 
 
-def build_container(*, with_failing_reaction: bool = False) -> Container:
+def build_container(
+    *, with_failing_reaction: bool = False, with_api: bool = False
+) -> Container:
     """Wire the storefront and return a container ready to resolve from.
 
     Args:
         with_failing_reaction: Whether to bind a third reaction to `OrderPlaced` that always
             fails. The failure walkthrough turns this on to show that the other two reactions
             still run and that the failures arrive together.
+        with_api: Whether to add the HTTP edge in `api.py`. Off by default, so the walkthrough
+            demonstrates CQRS on its own; `./dx serve` turns it on.
     """
     builder = ContainerBuilder()
 
@@ -74,5 +79,8 @@ def build_container(*, with_failing_reaction: bool = False) -> Container:
 
     if with_failing_reaction:
         register_event_handler(builder, OrderPlaced, ChargeCard, scope=Scope.TRANSIENT)
+
+    if with_api:
+        register_api(builder)
 
     return builder.build()

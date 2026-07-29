@@ -33,6 +33,7 @@ from .domain import (
     BookRoom,
     GetBooking,
     NoSuchBookingError,
+    NotAuthenticatedError,
     RoomBooked,
     RoomTakenError,
     Tenant,
@@ -85,6 +86,14 @@ def build_container() -> Container:
     )
     register_error(
         builder, RoomTakenError, status=HTTPStatus.CONFLICT, title="Room already booked"
+    )
+    # Raised by `RequireTenant`, which guards every route. A refusal has to be expressible
+    # without knowing what the route it refused would have returned, and a mapped exception is.
+    register_error(
+        builder,
+        NotAuthenticatedError,
+        status=HTTPStatus.UNAUTHORIZED,
+        title="Who are you?",
     )
 
     # The API edge. A handler holds no state between requests, so Transient.

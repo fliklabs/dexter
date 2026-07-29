@@ -7,6 +7,7 @@
 #   ./dx --help             every command
 #   ./dx example list       what reference applications exist
 #   ./dx example storefront run one
+#   ./dx serve              every reference app on one port, for a browser
 #   ./dx test               the suite, with coverage and timings
 #   ./dx verify             the full gate — what CI runs
 #

@@ -11,6 +11,7 @@ consequential property of a binding and should not be chosen by omission.
 
 from dexter.dependency_injection import Container, ContainerBuilder, Scope
 
+from .api import register_api
 from .domain import Clock, Notifier, Repository, Settings
 from .services import (
     ArchiveJobHandler,
@@ -29,7 +30,10 @@ DEFAULT_SETTINGS = Settings(dsn="postgres://demo/taskflow", worker_count=3)
 
 
 def build_container(
-    settings: Settings | None = None, *, with_notifier: bool = False
+    settings: Settings | None = None,
+    *,
+    with_notifier: bool = False,
+    with_api: bool = False,
 ) -> Container:
     """Wire the application and return a container ready to resolve from.
 
@@ -38,6 +42,8 @@ def build_container(
         with_notifier: Whether to bind a `Notifier`. Left unbound, every `Notifier | None`
             dependency receives `None`, which is how the demo shows optional dependencies
             without changing a single line of handler code.
+        with_api: Whether to add the HTTP edge in `api.py`. Off by default, so the walkthrough
+            demonstrates dependency injection on its own; `./dx serve` turns it on.
     """
     builder = ContainerBuilder()
 
@@ -85,5 +91,8 @@ def build_container(
 
     if with_notifier:
         builder.register(Notifier).to(ConsoleNotifier, scope=Scope.SINGLETON)
+
+    if with_api:
+        register_api(builder)
 
     return builder.build()

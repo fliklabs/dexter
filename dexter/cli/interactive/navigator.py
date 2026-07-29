@@ -1,11 +1,19 @@
 """The loop: draw a menu, run what was chosen, draw it again.
 
-This is the only async part of the interactive layer, and only because running a command is.
-Everything it draws with is synchronous, and it blocks the event loop while waiting for a
-keypress — which is correct here. The menu is the whole program while it is on screen, and a
-command's own work is awaited between screens, not during them.
+Everything the menu draws with is synchronous, and while it is waiting for the user it blocks
+on a keypress — which is correct. The menu is the whole program while it is on screen.
+
+**A running command is the exception, and the reason this module is async.** It is started as a
+task and watched rather than awaited outright, with the screen in non-blocking mode and a short
+sleep each turn. That is what keeps Ctrl+C reachable while something is running: without it the
+only thread there is sits inside `getch`, no key is read for as long as the command lasts, and
+anything that does not finish on its own — a server, a watch loop — can never be stopped.
+
+The cost is a poll rather than an interrupt, which for a keypress nobody can type faster than
+`_TICK` is not a cost at all.
 """
 
+import asyncio
 from typing import Any
 
 import click
@@ -14,10 +22,17 @@ from dexter.dependency_injection import Container
 
 from ..console import CliConsole
 from ..models import read_fields, shell_command, to_argv
-from ..runner import Capture, invoke
+from ..runner import Capture, Outcome, invoke
 from .menu import Menu
-from .rendering import Quit, terminal
+from .rendering import INTERRUPT, Modal, Quit, polling, terminal
 from .screens import confirm_screen, list_screen, output_screen, params_screen
+
+_TICK = 0.03
+"""Seconds between polls while a command runs.
+
+Short enough that a keypress feels immediate, long enough that watching costs nothing. The
+sleep is not a delay — it is what hands the event loop back so the command can make progress.
+"""
 
 
 class _Session:
@@ -90,21 +105,94 @@ def _collect(screen: Any, command: click.Command) -> list[str] | None:
 
 
 async def _run(session: _Session, path: tuple[str, ...], argv: list[str]) -> int:
-    """Run a command with its output painted into a pane as it is produced."""
+    """Run a command, painting its output and watching for Ctrl+C while it works."""
     title = " ".join(path)
+    latest = ""
 
-    def repaint(output: str) -> None:
-        output_screen(session.screen, f"Running: {title}", output, live=True)
+    def collect(output: str) -> None:
+        # Only records. Painting is the watch loop's job, so a command that produces nothing
+        # still gets a screen that responds, and one that floods does not repaint per write.
+        nonlocal latest
+        latest = output
 
-    repaint("")
-    outcome = await invoke(
-        session.root,
-        [*path, *argv],
-        session.container,
-        prog_name=session.prog_name,
-        capture=Capture(session.console, repaint),
+    task = asyncio.create_task(
+        invoke(
+            session.root,
+            [*path, *argv],
+            session.container,
+            prog_name=session.prog_name,
+            capture=Capture(session.console, collect),
+        )
     )
+    outcome = await _watch(session.screen, task, title, lambda: latest)
 
     status = "ok" if outcome.succeeded else f"exit {outcome.exit_code}"
     output_screen(session.screen, f"{title} — {status}", outcome.output)
     return outcome.exit_code
+
+
+async def _watch(
+    screen: Any,
+    task: asyncio.Task[Outcome],
+    title: str,
+    output: Any,
+) -> Outcome:
+    """Watch a running command until it finishes or the user stops it.
+
+    The modal is drawn from inside this loop rather than by a blocking helper, so the command
+    keeps running while the question is on screen. Stopping something should not require the
+    thing to already be stopped.
+    """
+    modal: Modal | None = None
+    painted = None
+
+    with polling(screen):
+        while True:
+            # Wait on the command *first*, and only look at the keyboard once it has had its
+            # turn and not finished. `asyncio.wait` returns the moment the task completes, so
+            # a command that ends immediately never reaches the poll below — which matters,
+            # because a key read here is a key swallowed, and a fast command must not eat the
+            # keystroke meant for the screen that follows it.
+            finished, _ = await asyncio.wait({task}, timeout=_TICK)
+            if finished:
+                break
+
+            key = _poll(screen)
+
+            if modal is not None:
+                answer = None if key == _NOTHING else modal.key(key)
+                if answer is None:
+                    modal.draw(screen)
+                    continue
+                modal, painted = None, None
+                if answer:
+                    task.cancel()
+                continue
+
+            if key == INTERRUPT:
+                modal = Modal(f"Stop {title}?", deny="Keep running", affirm="Stop")
+                modal.draw(screen)
+                continue
+
+            current = output()
+            if current != painted:
+                output_screen(screen, f"Running: {title}", current, live=True)
+                painted = current
+
+    return await task
+
+
+_NOTHING = -1
+"""What a non-blocking `getch` returns when no key is waiting."""
+
+
+def _poll(screen: Any) -> int:
+    """Read a key if one is waiting, or `_NOTHING`.
+
+    Ctrl+C is still caught defensively: raw mode should deliver it as a byte, but a terminal
+    that disagrees would otherwise unwind the whole menu from inside a draw.
+    """
+    try:
+        return int(screen.getch())
+    except KeyboardInterrupt:
+        return INTERRUPT

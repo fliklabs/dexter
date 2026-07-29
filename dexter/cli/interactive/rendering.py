@@ -102,6 +102,68 @@ def body_height(screen: Any) -> int:
     return max(1, int(height) - 2)
 
 
+@contextlib.contextmanager
+def polling(screen: Any) -> Iterator[None]:
+    """Make `getch` return immediately for the duration, rather than parking the thread.
+
+    This is what lets something run *while* the screen is watched. A blocking `getch` holds the
+    only thread there is, so nothing else — no command, no server, no repaint on a timer —
+    makes progress until a key arrives. Non-blocking reads turn waiting into a loop the caller
+    can put an `await` in.
+
+    Always restored, because every other screen depends on a read that waits.
+    """
+    screen.nodelay(True)
+    try:
+        yield
+    finally:
+        screen.nodelay(False)
+
+
+class Modal:
+    """A two-option prompt drawn over whatever is already on screen.
+
+    Drawing and key handling are separate so one widget serves both kinds of caller: a screen
+    that blocks on a key, and a poll loop that cannot. A modal raised over a *running* command
+    must not stop it — the command keeps going while the question sits there — and that is only
+    possible if the modal never owns the loop.
+    """
+
+    __slots__ = ("options", "prompt", "selected")
+
+    def __init__(self, prompt: str, *, deny: str, affirm: str) -> None:
+        """Set the question and what the two answers are called."""
+        self.prompt = prompt
+        self.options = (deny, affirm)
+        self.selected = 0
+
+    def draw(self, screen: Any) -> None:
+        """Paint the prompt and the two options over the current screen."""
+        height, width = screen.getmaxyx()
+        row = max(0, height // 2 - 2)
+        write(screen, row, 2, self.prompt.ljust(width - 3), curses.A_BOLD)
+        for index, label in enumerate(self.options):
+            attribute = curses.A_REVERSE if index == self.selected else curses.A_NORMAL
+            write(screen, row + 2, 2 + index * 14, f"  {label}  ", attribute)
+        footer(screen, "←→ choose   Enter confirm   ESC cancel")
+        screen.refresh()
+
+    def key(self, key: int) -> bool | None:
+        """Apply one keypress. Returns the answer once settled, or `None` while still open."""
+        if key in (curses.KEY_LEFT, curses.KEY_RIGHT, ord("\t")):
+            self.selected = 1 - self.selected
+            return None
+        if key in ENTER:
+            return self.selected == 1
+        if key == ESC:
+            return False
+        if key == INTERRUPT:
+            # A second Ctrl+C means it. Someone reaching for it twice is not doing so by
+            # accident, and making them find the arrow keys first would be obtuse.
+            return True
+        return None
+
+
 def read_key(screen: Any) -> int:
     """Read one key, handling Ctrl+C rather than letting it escape.
 
@@ -125,28 +187,13 @@ def confirm_quit(screen: Any) -> bool:
     Drawn as a modal rather than quitting outright: Ctrl+C is easy to hit by accident, and
     losing a half-filled form to a slip is annoying.
     """
-    height, width = screen.getmaxyx()
-    row = max(0, height // 2 - 2)
-    selected = 0
-
+    modal = Modal("Leave the menu?", deny="Stay", affirm="Quit")
     while True:
-        prompt = "Leave the menu?"
-        write(screen, row, 2, prompt.ljust(width - 3), curses.A_BOLD)
-        for index, label in enumerate(("Stay", "Quit")):
-            attribute = curses.A_REVERSE if index == selected else curses.A_NORMAL
-            write(screen, row + 2, 2 + index * 10, f"  {label}  ", attribute)
-        footer(screen, "←→ choose   Enter confirm   ESC stay")
-        screen.refresh()
-
+        modal.draw(screen)
         try:
             key = screen.getch()
         except KeyboardInterrupt:
             return True
-        if key in (curses.KEY_LEFT, curses.KEY_RIGHT, ord("\t")):
-            selected = 1 - selected
-        elif key in ENTER:
-            return selected == 1
-        elif key == ESC:
-            return False
-        elif key == INTERRUPT:
-            return True
+        answer = modal.key(key)
+        if answer is not None:
+            return answer

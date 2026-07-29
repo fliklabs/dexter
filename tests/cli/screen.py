@@ -28,6 +28,9 @@ KEYS = {
 }
 """Names for the keys a test sends, so a script reads as a sequence of keystrokes."""
 
+NOTHING = -1
+"""What a non-blocking read returns when no key is waiting. `curses.ERR`."""
+
 
 def _code(key: Key) -> int:
     """The curses key code for a scripted keypress."""
@@ -56,6 +59,7 @@ class FakeScreen:
         self._keys = [_code(key) for key in (keys or ())]
         self._size = size
         self._pending: dict[int, str] = {}
+        self._polling = False
         self.frames: list[list[str]] = []
         self.reads = 0
 
@@ -76,9 +80,17 @@ class FakeScreen:
         height = self._size[0]
         self.frames.append([self._pending.get(row, "") for row in range(height)])
 
+    def nodelay(self, flag: bool) -> None:
+        self._polling = flag
+
     def getch(self) -> int:
         self.reads += 1
         if not self._keys:
+            if self._polling:
+                # Watching a running command: no key waiting is the ordinary case, and the
+                # loop is expected to keep asking. Only a *blocking* read that runs out means
+                # a screen failed to return, which is what `OutOfKeysError` is for.
+                return NOTHING
             raise OutOfKeysError("the screen asked for a key the test did not script")
         return self._keys.pop(0)
 

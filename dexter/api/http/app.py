@@ -11,6 +11,7 @@ consumer.
 """
 
 import inspect
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -76,7 +77,7 @@ async def create_app(
             endpoint=build_endpoint(container, record, exposure),
             methods=[str(exposure.method)],
             status_code=int(exposure.status),
-            response_model=record.response_model,
+            response_model=_response_model(record.response_model),
             tags=list(exposure.tags),
             summary=exposure.summary,
             description=exposure.description or inspect.getdoc(record.handler) or "",
@@ -86,6 +87,17 @@ async def create_app(
         )
 
     return target
+
+
+def _response_model(declared: Any) -> Any:
+    """What to describe the response as, or `None` for a handler that serves no body.
+
+    A handler annotated `-> None` has said it returns nothing, and passing `NoneType` through
+    as a model says the opposite — the framework then insists on describing a body, and
+    refuses outright to pair that with a status that forbids one. `204 No Content` on a
+    handler returning `None` is the obvious thing to write and has to work.
+    """
+    return None if declared is type(None) else declared
 
 
 async def _registry(container: Container) -> ExposureRegistry:
