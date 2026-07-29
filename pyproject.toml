@@ -10,9 +10,14 @@ requires-python = ">=3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version"]
-# pydantic>=2.12 is a hard floor, not a preference: earlier releases have no cp314
-# `pydantic-core` wheel and their sdist build fails on Python 3.14.
-dependencies = ["pydantic>=2.12"]
+# `pydantic>=2.12` is a hard floor, not a preference: earlier releases have no cp314
+# `pydantic-core` wheel and their sdist build fails on Python 3.14. `click` and `rich` are
+# here for `dexter.cli` and were a deliberate decision — see AGENTS.md.
+dependencies = [
+    "click>=8.3",
+    "pydantic>=2.12",
+    "rich>=14",
+]
 classifiers = ["Typing :: Typed"]
 
 # `requires-python` above is the public compatibility floor and the ONLY hand-edited
@@ -37,6 +42,9 @@ include = [
     "/dexter",
     "/tests",
     "/examples",
+    "/tools",
+    "/dx",
+    "/verify.sh",
     "/README.md",
     "/LICENSE",
     "/pyproject.toml",
@@ -44,7 +52,11 @@ include = [
 
 [dependency-groups]
 dev = [{ include-group = "test" }, { include-group = "lint" }]
-test = ["pytest>=8.3", "pytest-asyncio>=1.4"]
+test = [
+    "pytest>=8.3",
+    "pytest-asyncio>=1.4",
+    "pytest-cov>=7",
+]
 lint = ["ruff>=0.9", "mypy>=2.3"]
 
 # ─────────────────────────────── ruff ────────────────────────────────
@@ -115,6 +127,9 @@ known-first-party = ["dexter"]
 # The reference app's whole purpose is to print a readable transcript. Docstring rules stay
 # on: an example is documentation, so it should be documented.
 "examples/**/*.py" = ["T20"]
+# The CLI's whole job is to write to a terminal, and its commands are documented by their
+# docstrings the same way an example is.
+"tools/**/*.py" = ["T20"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -129,7 +144,7 @@ warn_unreachable = true
 # `examples` is checked at full strict, with no relaxing override: nothing executes the
 # reference app, so type checking is its only protection against drifting out of step with
 # the API — and if it passes under strict, consumers' code can too.
-files = ["dexter", "tests", "examples"]
+files = ["dexter", "tests", "examples", "tools"]
 enable_error_code = ["redundant-expr", "possibly-undefined", "truthy-bool"]
 
 # ────────────────────────────── pytest ───────────────────────────────

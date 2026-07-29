@@ -8,6 +8,31 @@ import subprocess
 import sys
 
 import dexter
+from dexter.cli import (
+    ACCENT,
+    Capture,
+    CliConsole,
+    CliError,
+    CliNotWiredError,
+    CliRegistrationError,
+    CommandTree,
+    DuplicateCommandError,
+    Field,
+    FieldKind,
+    InteractiveUnavailableError,
+    InvalidCommandError,
+    Outcome,
+    describe_command,
+    describe_kind,
+    help_text,
+    inject,
+    invoke,
+    read_fields,
+    register_command,
+    run,
+    shell_command,
+    use_cli,
+)
 from dexter.commons import DexterError, DexterGroupError, describe_type
 from dexter.cqrs import (
     BusClosedError,
@@ -193,6 +218,8 @@ class TestCqrsSurface:
         }
 
     def test_the_registries_and_pipeline_are_exported(self) -> None:
+        # Note `dexter.cli` deliberately calls its own equivalent `CommandTree`, so these two
+        # modules can be imported together without one shadowing the other.
         assert {CommandRegistry, QueryRegistry, EventRegistry, MiddlewarePipeline}
 
     def test_the_bus_group_is_exported(self) -> None:
@@ -228,3 +255,59 @@ class TestCqrsSurface:
         # `except*` only works on a real ExceptionGroup, so this is load-bearing.
         assert issubclass(EventHandlingError, ExceptionGroup)
         assert issubclass(DispatchFailedError, ExceptionGroup)
+
+
+class TestCliSurface:
+    def test_the_wiring_entry_points_are_exported(self) -> None:
+        assert {use_cli, register_command, inject, run, invoke}
+
+    def test_the_registry_and_console_are_exported(self) -> None:
+        assert {CommandTree, CliConsole, Capture, Outcome}
+
+    def test_the_form_types_are_exported(self) -> None:
+        # An application rendering its own menu needs these to describe a command.
+        assert {
+            Field,
+            FieldKind,
+            read_fields,
+            describe_command,
+            shell_command,
+            help_text,
+        }
+
+    def test_every_error_is_exported(self) -> None:
+        errors = {
+            CliError,
+            CliNotWiredError,
+            CliRegistrationError,
+            DuplicateCommandError,
+            InteractiveUnavailableError,
+            InvalidCommandError,
+        }
+        assert all(issubclass(error, CliError) for error in errors)
+
+    def test_cli_errors_descend_from_dexter_error(self) -> None:
+        assert issubclass(CliError, DexterError)
+
+    def test_the_colour_vocabulary_is_exported(self) -> None:
+        assert isinstance(ACCENT, str)
+
+    def test_the_field_kinds_follow_the_enum_convention(self) -> None:
+        assert all(kind.value == kind.name for kind in FieldKind)
+        assert describe_kind(FieldKind.FLAG) == "FieldKind.FLAG"
+
+    def test_importing_the_cli_does_not_import_curses(self) -> None:
+        """`dexter.cli` must stay importable where curses is not available."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, dexter.cli; print('curses' in sys.modules)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "False", (
+            "importing dexter.cli pulled in curses, which is not available everywhere"
+        )

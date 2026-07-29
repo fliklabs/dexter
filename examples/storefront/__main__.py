@@ -198,23 +198,37 @@ class Unwired(PlaceOrder):
     """A command nothing handles, so the transcript can show what that reports."""
 
 
-async def main() -> None:
-    """Run the whole walkthrough."""
+SECTIONS = {
+    "ticket": show_a_command_and_its_ticket,
+    "events": show_events_fanning_out,
+    "correlation": show_correlation,
+    "query": show_a_query,
+    "deferred": show_deferred_dispatch,
+    "settling": show_settling,
+    "mistakes": show_what_goes_wrong,
+}
+"""Each part of the walkthrough, so one can be run on its own."""
+
+
+async def main(*, section: str = "all") -> None:
+    """Run the walkthrough, or one section of it.
+
+    Args:
+        section: A key of `SECTIONS`, or `"all"` for the whole thing.
+    """
     print("dexter · storefront reference app")
+
+    chosen = SECTIONS if section == "all" else {section: SECTIONS[section]}
 
     container = build_container()
     try:
-        await show_a_command_and_its_ticket(container)
-        await show_events_fanning_out(container)
-        await show_correlation(container)
-        await show_a_query(container)
-        await show_deferred_dispatch(container)
-        await show_settling(container)
-        await show_what_goes_wrong(container)
+        for run_section in chosen.values():
+            await run_section(container)
     finally:
         await container.aclose()
 
-    await show_failure_reporting()
+    if section == "all":
+        await show_failure_reporting()
 
     heading("shutdown")
     line("containers closed")

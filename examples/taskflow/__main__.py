@@ -163,25 +163,45 @@ async def show_resolution_failure(container: Container) -> None:
         note("The chain is the point: it names the path, not just the missing key.")
 
 
-async def main() -> None:
-    """Run the whole walkthrough."""
+SECTIONS = {
+    "startup": show_startup,
+    "scopes": show_concurrent_scopes,
+    "lifetimes": show_lifetimes_within_one_scope,
+    "self-injection": show_self_injection,
+    "probing": show_try_resolve,
+    "failure": show_resolution_failure,
+    "disposal": show_disposal,
+}
+"""Each part of the walkthrough, so one can be run on its own.
+
+Named rather than numbered: `--section disposal` says what you will see, and the names do not
+shift when a section is inserted before them.
+"""
+
+
+async def main(*, section: str = "all", with_notifier: bool = False) -> None:
+    """Run the walkthrough, or one section of it.
+
+    Args:
+        section: A key of `SECTIONS`, or `"all"` for the whole thing.
+        with_notifier: Bind a `Notifier`, so the optional dependency is injected rather than
+            arriving as `None`.
+    """
     print("dexter · taskflow reference app")
     reset_tags()
 
-    container = build_container()
+    chosen = SECTIONS if section == "all" else {section: SECTIONS[section]}
+
+    container = build_container(with_notifier=with_notifier)
     try:
-        await show_startup(container)
-        await show_concurrent_scopes(container)
-        await show_lifetimes_within_one_scope(container)
-        await show_self_injection(container)
-        await show_try_resolve(container)
-        await show_resolution_failure(container)
-        await show_disposal(container)
+        for run_section in chosen.values():
+            await run_section(container)
         pool = await container.resolve(ConnectionPool)
     finally:
         await container.aclose()
 
-    await show_optional_dependency()
+    if section == "all":
+        await show_optional_dependency()
 
     heading("shutdown")
     line(f"container closed  {tag(pool)} open={pool.is_open}")

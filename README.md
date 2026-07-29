@@ -21,6 +21,7 @@ drives an event loop on your behalf.
 | `dexter.commons` | Scaffolded — shared primitives |
 | `dexter.dependency_injection` | Implemented — container, scopes, async resolution |
 | `dexter.cqrs` | Implemented — commands, queries, events, buses, middleware |
+| `dexter.cli` | Implemented — a keyboard-navigable CLI you register commands into |
 
 ## Install
 
@@ -28,9 +29,10 @@ drives an event loop on your behalf.
 uv add "dexter @ git+https://github.com/fliklabs/dexter"
 ```
 
-Runtime dependencies: `pydantic>=2.12` (which brings `pydantic-core`,
-`annotated-types`, `typing-extensions` and `typing-inspection`). The floor is hard —
-earlier pydantic releases have no cp314 wheel and fail to build on Python 3.14.
+Runtime dependencies: `pydantic>=2.12`, `click>=8.3` and `rich>=14`. The pydantic floor is
+hard — earlier releases have no cp314 wheel and fail to build on Python 3.14. `click` and
+`rich` are what `dexter.cli` is built from; modules are imported directly, so a consumer who
+never touches the CLI never imports them.
 
 Note that importing a framework module costs roughly 45 ms, because pydantic's schema
 machinery loads when the first model is defined. `import dexter` on its own stays free.
@@ -239,17 +241,76 @@ An order service that places orders, fans an event out to two reactions, correla
 handler publishes with the command that caused it, dispatches without redeeming, and shows what
 an aggregated failure reports. See [examples/README.md](./examples/README.md).
 
+## CLI
+
+`dexter.cli` turns commands registered into a container into both a keyboard-driven menu and a
+scriptable command tree. It **ships no commands of its own** — you register yours:
+
+```python
+import click
+
+from dexter.cli import inject, register_command, run, use_cli
+from dexter.dependency_injection import Container, ContainerBuilder
+
+
+@click.command("deploy")
+@click.option("--to", type=click.Choice(["staging", "production"]), required=True)
+@inject
+async def deploy(scope: Container, to: str) -> None:
+    """Deploy the service."""
+    releases = await scope.resolve(Releases)
+    await releases.deploy(to)
+
+
+builder = ContainerBuilder()
+use_cli(builder)
+register_command(builder, deploy)
+container = builder.build()
+```
+
+`inject` opens a container scope for the call and closes it afterwards, so a command resolves
+exactly like a request handler and whatever it resolved is released when it finishes.
+
+Your entry point starts the loop — dexter never does:
+
+```python
+raise SystemExit(asyncio.run(run(container, sys.argv[1:], prog_name="mytool")))
+```
+
+**The menu is a shell over the same tree.** `run` parses arguments when it gets them, opens the
+menu when it gets none and there is a terminal, and prints help when there is no terminal — so
+CI, scripts and agents never touch the interactive layer, and a piped invocation cannot crash
+inside curses.
+
+| You type | You get |
+| --- | --- |
+| `mytool` | The menu: ↑↓ to move, Enter to select, ESC to go back |
+| `mytool deploy --to staging` | The same command, scripted |
+| `mytool --help` | Everything, generated from the same tree |
+| `echo \| mytool` | Help, and exit 0 |
+
+Picking a command in the menu builds a form from its options — flags toggle, a `Choice` becomes
+a picker, everything else opens an inline editor — and then shows you the shell command it is
+about to run, which is how the menu teaches its own scriptable form.
+
+Navigation is stdlib `curses`, imported lazily so the module still works where it is absent.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/). Python is installed and pinned by uv —
 you do not need a system Python.
 
 ```bash
-uv sync                                    # create .venv and install dev dependencies
-./verify.sh --fix                          # format, lint, type-check, test
-./verify.sh                                # same, without writing changes
-uv run pytest tests/cqrs                   # run one module's tests
+uv sync                       # create .venv and install dev dependencies
+./dx                          # the repo CLI: run an example, run the tests
+./dx test                     # the suite, with pass rate, timing and coverage
+./verify.sh --fix             # format, lint, type-check, test
+./verify.sh                   # same, without writing changes
+uv run pytest tests/cqrs      # run one module's tests
 ```
+
+`./verify.sh` is the gate and is what CI runs; `./dx test` is the feedback loop and reports the
+statistics the gate does not. `./dx verify` runs the gate.
 
 A change is not finished until `./verify.sh` exits 0.
 

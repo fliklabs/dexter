@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# The repository CLI. Run it with no arguments for a keyboard-driven menu, or name a
+# command to run it directly — the menu is a shell over the same commands.
+#
+#   ./dx                    open the menu
+#   ./dx --help             every command
+#   ./dx example list       what reference applications exist
+#   ./dx example storefront run one
+#   ./dx test               the suite, with coverage and timings
+#   ./dx verify             the full gate — what CI runs
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$REPO_ROOT"
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "ERROR: uv is not installed. See https://docs.astral.sh/uv/" >&2
+    exit 1
+fi
+
+exec uv run --quiet python -m tools.cli "$@"
