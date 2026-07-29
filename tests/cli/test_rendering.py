@@ -8,8 +8,11 @@ import pytest
 
 from dexter.cli.interactive import rendering
 from dexter.cli.interactive.rendering import (
+    DRAG_OFF,
+    DRAG_ON,
     REDRAW,
     Quit,
+    Toast,
     body_height,
     confirm_quit,
     footer,
@@ -154,6 +157,53 @@ class TestConfirmQuit:
         assert "Leave the menu?" in screen.text()
 
 
+class TestToast:
+    def test_it_says_what_happened(self) -> None:
+        screen = FakeScreen()
+        Toast("Copied to clipboard", at=0.0).draw(screen)
+        screen.refresh()
+
+        assert "Copied to clipboard" in screen.last_text()
+
+    def test_it_is_drawn_as_a_bordered_box(self) -> None:
+        """The same box as the modal, so a reader already knows it is the menu talking."""
+        screen = FakeScreen()
+        Toast("Copied", at=0.0).draw(screen)
+        screen.refresh()
+
+        assert "┌" in screen.last[0]
+        assert "┐" in screen.last[0]
+        assert "└" in screen.last[2]
+
+    def test_it_sits_in_the_top_right(self) -> None:
+        screen = FakeScreen(size=(24, 80))
+        Toast("Copied", at=0.0).draw(screen)
+        screen.refresh()
+
+        assert screen.last[0].index("┌") > 40
+
+    def test_it_floats_over_what_is_already_there(self) -> None:
+        screen = FakeScreen(size=(24, 80))
+        write(screen, 1, 0, "output that was already on screen")
+        Toast("Copied", at=0.0).draw(screen)
+        screen.refresh()
+
+        assert screen.last[1].startswith("output that was already on screen")
+
+    def test_it_expires_after_its_welcome(self) -> None:
+        toast = Toast("Copied", at=100.0, seconds=3.0)
+
+        assert not toast.expired(102.0)
+        assert toast.expired(103.0)
+
+    def test_a_long_message_is_cut_to_the_window(self) -> None:
+        screen = FakeScreen(size=(24, 30))
+        Toast("something far too long to fit in here", at=0.0).draw(screen)
+        screen.refresh()
+
+        assert all(len(line) < 30 for line in screen.last)
+
+
 class TestShowCursor:
     def test_a_terminal_that_cannot_is_not_an_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -183,6 +233,8 @@ class TestTerminal:
             "initscr",
             "noecho",
             "cbreak",
+            "mousemask",
+            "mouseinterval",
             "raw",
             "curs_set",
             "start_color",
@@ -207,6 +259,51 @@ class TestTerminal:
         assert calls.index("body") < calls.index("endwin")
         assert "raw" in calls
         assert "noraw" in calls
+
+    def test_asks_for_the_mouse_and_gives_it_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reporting is taken over for the menu's lifetime and no longer."""
+        calls: list[str] = []
+        self.install(monkeypatch, calls)
+
+        with terminal():
+            calls.append("body")
+
+        assert calls.index("mousemask") < calls.index("body")
+        assert calls.index("body") < calls.index("endwin")
+        assert calls.count("mousemask") == 2
+        assert "mouseinterval" in calls
+
+    def test_asks_the_terminal_for_drag_reporting_itself(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """ncurses never asks for motion, so the sequence goes out by hand — and comes back."""
+        self.install(monkeypatch, [])
+
+        with terminal():
+            pass
+
+        written = capsys.readouterr().out
+        assert DRAG_ON in written
+        assert DRAG_OFF in written
+        assert written.index(DRAG_ON) < written.index(DRAG_OFF)
+
+    def test_a_terminal_without_a_mouse_still_gets_a_menu(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+        self.install(monkeypatch, calls)
+
+        def refuse(*args: Any) -> None:
+            raise curses.error("no mouse here")
+
+        monkeypatch.setattr(curses, "mousemask", refuse)
+
+        with terminal():
+            pass
+
+        assert calls[-1] == "endwin"
 
     def test_restores_the_terminal_when_the_body_raises(
         self, monkeypatch: pytest.MonkeyPatch

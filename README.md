@@ -294,7 +294,14 @@ Picking a command in the menu builds a form from its options — flags toggle, a
 a picker, everything else opens an inline editor — and then shows you the shell command it is
 about to run, which is how the menu teaches its own scriptable form.
 
+A command that keeps running is watched rather than awaited, so its pane stays live: ↑↓ and
+PgUp/PgDn scroll back through the output while it is still arriving, dragging across it copies
+what you dragged over — the view scrolls itself when you drag past an edge — and Ctrl+C asks
+before it stops anything.
+
 Navigation is stdlib `curses`, imported lazily so the module still works where it is absent.
+Mouse reporting is asked for while the menu is up, which takes over the terminal's own
+click-and-drag; most terminals give it back while Shift is held.
 
 ## API
 

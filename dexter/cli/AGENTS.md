@@ -16,7 +16,8 @@ everything else. `tools/cli/` in this repository is the worked example.
 | `tree.py` | `CommandTree` — the nested click groups every path walks |
 | `runner.py` | `invoke` — click parses, dexter awaits; and output capture |
 | `use.py` | `use_cli`, `register_command`, `inject` |
-| `interactive/` | The curses layer. `menu.py` is its state; the rest is drawing |
+| `clipboard.py` | `copy` — the platform's own tools, then OSC 52. Imports no curses |
+| `interactive/` | The curses layer. `menu.py` and `pane.py` are its state; the rest is drawing |
 
 ## The consumer starts the event loop, not dexter
 
@@ -91,12 +92,24 @@ like the output had stopped.
 **Every key waiting is taken in one turn.** Reading a single key per turn caps input at one
 event per `_TICK`, and a held arrow key or a wheel emits them faster than that — so the backlog
 grows for as long as someone keeps scrolling and the view lands where they were a moment ago.
-`_pending` drains the buffer, with a ceiling so a pasted wall of input cannot starve the
+`pane.pending` drains the buffer, with a ceiling so a pasted wall of input cannot starve the
 command of the event loop.
 
 `FakeScreen.keys_per_turn` exists for the same reason: a script is the whole session, so
 without it a drain would swallow every key the test meant for later screens. One per turn is
 the default; raise it to model input arriving faster than the loop turns.
+
+**Escape sequences arrive in pieces while polling, and are put back together in `pane`.**
+`nodelay` tells ncurses to return what it has rather than wait, and an arrow key is three bytes:
+it turns up as `27, 91, 65` instead of `KEY_UP`. Mouse reports survive only because ncurses
+reads their payload itself rather than through the key table — which is why a drag worked in a
+pane whose arrow keys did not. Two symptoms, neither of which looks like its cause: arrow keys
+did not scroll a running command, and the leading `27` reads as ESC in the *Stop this?* modal,
+so reaching for `→` to answer it cancelled the question instead. `pane.SEQUENCES` reassembles
+both cursor forms; a bare ESC is still an ESC, because bytes are only consumed when what follows
+spells a key. **A fake screen cannot catch this** — it hands over whatever the script contains,
+already assembled. It was found by driving the real menu under a pty and logging what the loop
+received, which is the only way this class of bug shows up.
 
 Three things that bit while writing this, all now pinned by tests:
 
@@ -105,6 +118,51 @@ Three things that bit while writing this, all now pinned by tests:
 - **A page is a page.** Line steps and page steps are separate tables. Folding them into one
   needs a magnitude to mean "and this one is a page", which then multiplies by the window and
   moves two.
+
+## A selection is held in document coordinates, never screen ones
+
+`Selection` is a line index and a column, and `Pane` is what maps a screen row onto a line so it
+can be. Anchoring to the screen instead is the obvious implementation and it is wrong: output
+arrives mid-drag and the view scrolls under it, so the highlight slides onto words nobody chose.
+
+The rest of the drag follows from that one decision:
+
+- **The release defines the selection, not the motion before it.** ncurses asks the terminal for
+  mouse reporting using the `XM` terminfo capability and, where that is missing — which includes
+  `xterm-256color` — falls back to a built-in default of mode 1000: presses and releases, *no
+  motion at all*. `REPORT_MOUSE_POSITION` surviving in the mask `mousemask` hands back means
+  only that ncurses can represent a motion event, never that one will arrive. A selection built
+  out of motion alone therefore selects nothing on most terminals: the anchor is never extended,
+  the release copies an empty range, and the whole feature looks inert while the view still
+  visibly pins. Extending to the release point makes press-then-release sufficient on its own.
+- **Mode 1002 is requested by hand**, in `rendering.DRAG_ON`, because ncurses never asks for it.
+  That is what makes the highlight live and auto-scroll possible; without it the feature still
+  works, it just has nothing to draw until the button comes up. Sent through `sys.stdout` rather
+  than `curses.putp`: `putp` writes into the C stdio buffer ncurses flushes on its own schedule,
+  and a menu whose whole job is holding a killable command cannot rely on that being flushed.
+- **A press pins the view.** Text that is still scrolling cannot be selected. A click that never
+  became a drag un-pins it again, so a stray click does not silently freeze the pane.
+- **Auto-scroll is applied on the tick, not on the report.** A terminal reports the mouse only
+  when it *moves*, so a pointer held just past the bottom edge produces no further events —
+  and a scroll that stopped the moment the pointer settled would stop exactly when it was
+  wanted. `Pane.drift` is set by the last report and spent every turn, proportional to the
+  overshoot and capped, so it reads as aimed rather than switched on.
+- **A drag never lands outside the window.** A report past the edge clamps to the first or last
+  *visible* line; the auto-scroll then brings the next line to the pointer. Clamping to the
+  document instead selects text the reader cannot see being selected.
+- **`clipboard.copy` returns whether anything happened**, and the toast says which. Claiming
+  "copied" when nothing was is worse than admitting it could not be.
+
+**Mouse reporting takes over the terminal's own selection** for as long as the menu is up. That
+is the trade, and it is worth stating plainly: native selection is wiped every time a live pane
+redraws, so in the one place it matters most it does not work. Most terminals still give it back
+while Shift is held.
+
+`KEY_MOUSE` is only half an event — the details must be fetched with `getmouse` before the next
+`getch` or they are lost. That is why draining input lives in `pane.py` next to the decoding
+rather than in the navigator: separating them makes the ordering a rule someone has to remember.
+`curses.getmouse` is a *module* function, so `pane._mouse` asks the window for one first; that
+is the only seam a `FakeScreen` can stand in through.
 
 ## A modal is a bordered box, and it floats
 
@@ -116,14 +174,20 @@ the first repaint leaves the box floating over the previous screen.
 `Modal` is drawing plus one key step for the same reason: the command carries on while the
 question is up.
 
+`Toast` is the same box in the top-right, and deliberately so — a reader has already learnt that
+a box means "the menu talking, not the command". It differs where it matters: it reports rather
+than interrupts, so it asks nothing and dismisses itself. Expiry is *asked*, not counted:
+`expired(now)` takes the time rather than reading a clock, so three seconds is a test assertion
+rather than three seconds of waiting.
+
 ## Menu state is separate from menu drawing
 
 `interactive/menu.py` holds every decision — the stack, the per-level cursor, what a selection
 resolves to — and touches no terminal. Keep new behaviour on that side of the line.
 
 The drawing is tested too, through `tests/cli/screen.py`: a curses window is only `erase`,
-`getmaxyx`, `addstr`, `refresh` and `getch`, so a fake one can replay a script of keypresses
-and hand back what was drawn. The whole navigator loop runs that way, commands included. That
+`getmaxyx`, `addstr`, `refresh`, `getch` and `getmouse`, so a fake one can replay a script of
+keypresses and mouse reports and hand back what was drawn. The whole navigator loop runs that way, commands included. That
 is what keeps the module above the coverage floor without a single `pragma: no cover`.
 
 ## `list_screen` handles going back itself

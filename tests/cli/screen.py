@@ -8,10 +8,39 @@ between the drawing being untestable and merely being tedious to test.
 
 import curses
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
-type Key = str | int
-"""A scripted keypress: a name from `KEYS`, or a raw character code."""
+
+class Report(NamedTuple):
+    """A scripted mouse event, in screen coordinates.
+
+    Scripted as one item because that is how a terminal delivers it: `getch` says `KEY_MOUSE`
+    and the details are fetched separately. Keeping the two halves together in the script means
+    a test never has to interleave them by hand.
+    """
+
+    row: int
+    column: int
+    state: int
+
+
+def press(row: int, column: int) -> Report:
+    """The button going down at a cell."""
+    return Report(row, column, curses.BUTTON1_PRESSED)
+
+
+def drag(row: int, column: int) -> Report:
+    """The pointer moving to a cell with the button held."""
+    return Report(row, column, curses.REPORT_MOUSE_POSITION)
+
+
+def release(row: int, column: int) -> Report:
+    """The button coming up at a cell."""
+    return Report(row, column, curses.BUTTON1_RELEASED)
+
+
+type Key = str | int | Report
+"""A scripted event: a name from `KEYS`, a raw character code, or a mouse report."""
 
 KEYS = {
     "up": curses.KEY_UP,
@@ -34,8 +63,8 @@ NOTHING = -1
 """What a non-blocking read returns when no key is waiting. `curses.ERR`."""
 
 
-def _code(key: Key) -> int:
-    """The curses key code for a scripted keypress."""
+def _code(key: Key) -> int | Report:
+    """The curses key code for a scripted keypress. Mouse reports pass through."""
     return KEYS[key] if isinstance(key, str) else key
 
 
@@ -58,7 +87,8 @@ class FakeScreen:
         `Sequence` rather than `list` so a script built as `["down"] * 3` is accepted: a
         `list` is invariant, and every caller would otherwise need an annotation.
         """
-        self._keys = [_code(key) for key in (keys or ())]
+        self._keys: list[int | Report] = [_code(key) for key in (keys or ())]
+        self._report: Report | None = None
         self._size = size
         self._pending: dict[int, str] = {}
         self._polling = False
@@ -111,13 +141,29 @@ class FakeScreen:
                 self._served = 0
                 return NOTHING
             self._served += 1
-            return self._keys.pop(0)
+            return self._next()
         if not self._keys:
             raise OutOfKeysError("the screen asked for a key the test did not script")
-        return self._keys.pop(0)
+        return self._next()
+
+    def getmouse(self) -> tuple[int, int, int, int, int]:
+        # Curses puts this on the module rather than the window; a window that has it is how a
+        # test stands in for the terminal. Raises like the real one when nothing was reported.
+        if self._report is None:
+            raise curses.error("no mouse event is waiting")
+        report, self._report = self._report, None
+        return (0, report.column, report.row, 0, report.state)
 
     def keypad(self, *args: Any, **kwargs: Any) -> None:
         return None
+
+    def _next(self) -> int:
+        """Take the next scripted event, holding a mouse report back for `getmouse`."""
+        item = self._keys.pop(0)
+        if isinstance(item, Report):
+            self._report = item
+            return curses.KEY_MOUSE
+        return item
 
     # ── what a test asserts against ──────────────────────────────────
 

@@ -11,20 +11,26 @@ row there would silently shift them all.
 
 import asyncio
 import contextlib
-import curses
 from collections.abc import Iterator
 from typing import Any
 
 import click
 import pytest
 
-from dexter.cli import CliConsole, CommandTree, inject, register_command, use_cli
+from dexter.cli import (
+    CliConsole,
+    CommandTree,
+    clipboard,
+    inject,
+    register_command,
+    use_cli,
+)
 from dexter.cli.interactive import navigator
 from dexter.cli.interactive.navigator import navigate
 from dexter.dependency_injection import Container, ContainerBuilder
 
 from .conftest import Ledger
-from .screen import FakeScreen, Key, fake_curs_set
+from .screen import FakeScreen, Key, drag, fake_curs_set, press, release
 
 DISMISS = ord("q")
 """Any key closes the output pane."""
@@ -62,6 +68,19 @@ async def brief(scope: Container) -> None:
     """Finish immediately."""
     console = await scope.resolve(CliConsole)
     console.ok("done")
+
+
+@pytest.fixture
+def copied(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record what reached the clipboard rather than putting it on the real one."""
+    taken: list[str] = []
+
+    def fake_copy(text: str) -> bool:
+        taken.append(text)
+        return True
+
+    monkeypatch.setattr(clipboard, "copy", fake_copy)
+    return taken
 
 
 @pytest.fixture
@@ -331,39 +350,143 @@ class TestScrollingWhileItRuns:
         assert ledger.entries.count("stopped") == 1
 
 
-class TestDrainingTheKeyboard:
-    """Every key waiting is taken in one turn, not one key per turn.
+class TestSelectingWithTheMouse:
+    """Dragging across a running command's output and copying what was dragged.
 
-    This is what keeps scrolling level with the hand doing it. A held arrow key or a wheel
-    emits faster than the loop turns, so taking a single key each time leaves a backlog that
-    grows for as long as someone keeps scrolling — and the view lands where they were several
-    moments ago rather than where they are.
+    The unit tests in `test_pane.py` cover what a drag means; these cover that a mouse report
+    reaches the pane at all — that the reports are fetched in the right order, that the
+    highlight is painted, and that the toast is drawn over output that is still arriving.
     """
 
-    def test_takes_every_key_waiting(self) -> None:
-        screen = FakeScreen(["up", "up", "down"])
-        screen.keys_per_turn = 3
-        screen.nodelay(True)
+    async def test_a_drag_copies_what_it_crossed(
+        self,
+        builder: ContainerBuilder,
+        monkeypatch: pytest.MonkeyPatch,
+        copied: list[str],
+    ) -> None:
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            press(1, 0),
+            drag(2, 7),
+            release(2, 7),
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
 
-        assert navigator._pending(screen) == [
-            curses.KEY_UP,
-            curses.KEY_UP,
-            curses.KEY_DOWN,
-        ]
+        assert len(copied) == 1
+        assert "Copied to clipboard" in screen.text()
 
-    def test_takes_nothing_when_the_buffer_is_empty(self) -> None:
-        screen = FakeScreen([])
-        screen.nodelay(True)
+    async def test_the_selection_is_highlighted_while_it_is_dragged(
+        self,
+        builder: ContainerBuilder,
+        monkeypatch: pytest.MonkeyPatch,
+        copied: list[str],
+    ) -> None:
+        """Reverse video does not survive a `FakeScreen`, so the paint order is what is checked."""
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            press(1, 0),
+            drag(1, 4),
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
 
-        assert navigator._pending(screen) == []
+        assert "paused" in screen.text()
 
-    def test_leaves_the_rest_buffered_rather_than_starving_the_command(self) -> None:
-        """A terminal pasting a wall of input must not hold the event loop."""
-        screen = FakeScreen(["down"] * (navigator._BURST * 2))
-        screen.keys_per_turn = navigator._BURST * 2
-        screen.nodelay(True)
+    async def test_a_press_and_a_release_copy_without_any_motion(
+        self,
+        builder: ContainerBuilder,
+        monkeypatch: pytest.MonkeyPatch,
+        copied: list[str],
+    ) -> None:
+        """What a terminal reporting only presses and releases sends — most of them."""
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            press(1, 0),
+            release(3, 5),
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
 
-        assert len(navigator._pending(screen)) == navigator._BURST
+        assert len(copied) == 1
+        assert "Copied to clipboard" in screen.text()
+
+    async def test_a_click_alone_copies_nothing(
+        self,
+        builder: ContainerBuilder,
+        monkeypatch: pytest.MonkeyPatch,
+        copied: list[str],
+    ) -> None:
+        _, screen = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            press(2, 3),
+            release(2, 3),
+            "ctrl-c",
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
+
+        assert copied == []
+        assert "Copied to clipboard" not in screen.text()
+
+    async def test_the_mouse_does_not_answer_the_modal(
+        self,
+        builder: ContainerBuilder,
+        monkeypatch: pytest.MonkeyPatch,
+        copied: list[str],
+        ledger: Ledger,
+    ) -> None:
+        """A drag begun behind the box would be one nobody could see."""
+        exit_code, _ = await drive(
+            builder,
+            monkeypatch,
+            "down",
+            "enter",
+            "enter",
+            "ctrl-c",
+            press(1, 0),
+            drag(2, 4),
+            release(2, 4),
+            "right",
+            "enter",
+            DISMISS,
+            "esc",
+            "esc",
+        )
+
+        assert exit_code == ABORTED
+        assert copied == []
 
 
 class TestCommandsThatFinishOnTheirOwn:

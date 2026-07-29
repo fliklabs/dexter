@@ -8,6 +8,7 @@ established there is a terminal to draw on.
 import contextlib
 import curses
 import os
+import sys
 from collections.abc import Iterator
 from typing import Any
 
@@ -49,8 +50,10 @@ def terminal() -> Iterator[Any]:
             curses.start_color()
             curses.use_default_colors()
         screen.keypad(True)
+        enable_mouse()
         yield screen
     finally:
+        disable_mouse()
         # Restoration must happen whatever went wrong above. A terminal left in raw mode with
         # no cursor is one the user has to `reset` by hand, and they will not know why.
         show_cursor(visible=True)
@@ -59,6 +62,76 @@ def terminal() -> Iterator[Any]:
         curses.nocbreak()
         curses.echo()
         curses.endwin()
+
+
+DRAG_ON = "\033[?1002h"
+DRAG_OFF = "\033[?1002l"
+"""Button-event tracking: report motion, but only while a button is held.
+
+Sent by hand because **ncurses does not ask for it**. It enables mouse reporting from the `XM`
+terminfo capability, and where that is missing — which is the common case, `xterm-256color`
+included — it falls back to a built-in default of mode 1000: presses and releases, no motion at
+all. `REPORT_MOUSE_POSITION` surviving in the mask `mousemask` returns says only that ncurses
+can *represent* a motion event, not that anything will ever send one.
+
+Mode 1002 rather than 1003, which reports every movement whether or not a button is down: a
+drag is the only motion this menu has any use for, and 1003 turns an idle terminal into a
+stream of events the loop has to drain.
+
+Nothing is sent to *change* the report format. ncurses decodes the legacy `\\033[M` encoding
+here, and asking the terminal for the SGR format it has not been told to expect would turn
+every click into a burst of stray keys.
+"""
+
+
+def enable_mouse() -> None:
+    """Ask the terminal to report button presses, releases and drags.
+
+    Tolerated when it fails: a terminal without mouse reporting is not a terminal this menu
+    should refuse to run in, and everything here is reachable from the keyboard. A terminal that
+    does not know mode 1002 ignores the request, and presses and releases still arrive — which
+    is why a selection is defined by where the button came up rather than by the motion between.
+
+    **This takes over the terminal's own click-and-drag selection** for as long as the menu is
+    up, which is the trade: native selection is wiped every time a live pane redraws, so in the
+    one place selection matters most it does not work. Most terminals still give it back while
+    Shift is held.
+
+    `mouseinterval(0)` turns off click detection, which otherwise swallows a press and its
+    release for a third of a second to decide whether they were a click — long enough that a
+    drag begins by feeling broken.
+    """
+    with contextlib.suppress(curses.error):
+        curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+        curses.mouseinterval(0)
+    ask(DRAG_ON)
+
+
+def disable_mouse() -> None:
+    """Give the terminal its own mouse back.
+
+    Left on, the terminal keeps sending reports to whatever the user runs next, and they arrive
+    as garbage on its standard input.
+    """
+    ask(DRAG_OFF)
+    with contextlib.suppress(curses.error):
+        curses.mousemask(0)
+
+
+def ask(sequence: str) -> None:
+    """Put a terminal mode sequence on the wire, flushed there and then.
+
+    `curses.putp` is the obvious way and is the wrong one. It writes into the C stdio buffer
+    that ncurses flushes on its own schedule, so the request can still be sitting in it
+    unsent — and the menu's whole job is holding a command that may be killed rather than
+    asked to leave, which is precisely when an unflushed buffer is lost. `sys.stdout` is a
+    buffer this can flush itself.
+
+    Tolerated when it fails, like everything else about the mouse.
+    """
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdout.write(sequence)
+        sys.stdout.flush()
 
 
 def show_cursor(*, visible: bool) -> None:
@@ -196,6 +269,46 @@ class Modal:
             # accident, and making them find the arrow keys first would be obtuse.
             return True
         return None
+
+
+LINGER = 3.0
+"""Seconds a toast stays up. Long enough to read six words, short enough not to be in the way."""
+
+
+class Toast:
+    """A short message that appears in the corner and goes away by itself.
+
+    The same bordered box as `Modal`, and deliberately so — a reader has already learnt that a
+    box means "this is the menu talking, not the command". It differs in the two ways that
+    matter: it is in the top-right rather than the middle, because it reports rather than
+    interrupts, and it answers no question, so nothing has to be dismissed.
+
+    Expiry is asked, not counted: `expired` takes the time rather than reading a clock, so the
+    behaviour can be tested without waiting three seconds or patching anything.
+    """
+
+    __slots__ = ("message", "until")
+
+    def __init__(self, message: str, *, at: float, seconds: float = LINGER) -> None:
+        """Show `message` from `at` until `seconds` later."""
+        self.message = message
+        self.until = at + seconds
+
+    def expired(self, now: float) -> bool:
+        """Whether it has been up long enough."""
+        return now >= self.until
+
+    def draw(self, screen: Any) -> None:
+        """Paint the box in the top-right, over whatever is there."""
+        _, width = screen.getmaxyx()
+        inner = min(len(self.message), max(_NARROWEST, width - 8))
+        box = inner + 4
+        left = max(0, width - box - 2)
+
+        write(screen, 0, left, f"┌{'─' * (box - 2)}┐", curses.A_BOLD)
+        write(screen, 1, left, f"│{' ' * (box - 2)}│", curses.A_BOLD)
+        write(screen, 2, left, f"└{'─' * (box - 2)}┘", curses.A_BOLD)
+        write(screen, 1, left + 2, self.message[:inner], curses.A_BOLD)
 
 
 def read_key(screen: Any) -> int:

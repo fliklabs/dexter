@@ -21,6 +21,7 @@ from .rendering import (
     show_cursor,
     write,
 )
+from .selection import Selection
 
 _LABEL_WIDTH = 22
 _SUBMENU = "  \u203a"
@@ -196,24 +197,34 @@ def output_screen(screen: Any, title: str, text: str) -> None:
         # `None` means "the end" — resolved to a line here rather than left as a sentinel,
         # because a finished command produces no more output and so has nothing to follow.
         # Treating it as zero would send a reader who scrolled to the bottom back to the top.
-        offset = _clamp(scrolled(offset, key, len(lines), visible), len(lines), visible)
+        offset = clamp(scrolled(offset, key, len(lines), visible), len(lines), visible)
 
 
-def live_screen(screen: Any, title: str, text: str, offset: int | None = None) -> None:
+def live_screen(
+    screen: Any,
+    title: str,
+    text: str,
+    offset: int | None = None,
+    selection: Selection | None = None,
+) -> None:
     """Show a running command's output.
 
     `offset` of `None` follows the end, so new output appears as it is produced. A number
     pins the view there instead — which is the whole reason this takes one. A pane that
     always jumped to the bottom could not be read while anything was still writing to it,
     and a long-running command is exactly the case where you want to look back.
+
+    `selection`, when there is one, is painted over the text in reverse video.
     """
     lines = _lines(text)
     visible = body_height(screen)
-    position = _clamp(offset, len(lines), visible)
+    position = clamp(offset, len(lines), visible)
 
     _paint(screen, title, lines, position, visible)
+    if selection is not None and not selection.empty:
+        _highlight(screen, lines, position, visible, selection)
     if offset is None:
-        footer(screen, "running…   ↑↓ PgUp/PgDn scroll   Ctrl+C stop")
+        footer(screen, "running…   ↑↓ scroll   drag to copy   Ctrl+C stop")
     else:
         showing = min(position + visible, len(lines))
         footer(
@@ -243,8 +254,19 @@ def scrolled(offset: int | None, key: int, total: int, visible: int) -> int | No
         return offset
 
     bottom = max(0, total - visible)
-    settled = max(0, min(_clamp(offset, total, visible) + delta, bottom))
+    settled = max(0, min(clamp(offset, total, visible) + delta, bottom))
     return None if settled >= bottom else settled
+
+
+def clamp(offset: int | None, total: int, visible: int) -> int:
+    """Where to actually start drawing: the end when following, else a valid line.
+
+    Shared rather than private because anything that maps a screen row back to a line of text
+    has to agree with the paint about which line is on top, and two copies of this arithmetic
+    would disagree the moment one of them was fixed.
+    """
+    bottom = max(0, total - visible)
+    return bottom if offset is None else max(0, min(offset, bottom))
 
 
 # ── internals ────────────────────────────────────────────────────────
@@ -267,12 +289,6 @@ def _lines(text: str) -> list[str]:
     return text.splitlines() or ["(no output)"]
 
 
-def _clamp(offset: int | None, total: int, visible: int) -> int:
-    """Where to actually start drawing: the end when following, else a valid line."""
-    bottom = max(0, total - visible)
-    return bottom if offset is None else max(0, min(offset, bottom))
-
-
 def _paint(
     screen: Any, title: str, lines: list[str], offset: int, visible: int
 ) -> None:
@@ -281,6 +297,24 @@ def _paint(
     header(screen, title)
     for row, line in enumerate(lines[offset : offset + visible]):
         write(screen, row + 1, 0, line)
+
+
+def _highlight(
+    screen: Any, lines: list[str], offset: int, visible: int, selection: Selection
+) -> None:
+    """Redraw the selected parts of the visible lines in reverse video.
+
+    A second pass over the window rather than a branch inside `_paint`: the highlight is drawn
+    *over* text that is already there, so the ordinary path stays one unconditional write per
+    line and nothing about painting output changes because a mouse exists.
+    """
+    for row, line in enumerate(lines[offset : offset + visible]):
+        span = selection.span(offset + row, len(line))
+        if span is None:
+            continue
+        begins, ends = span
+        if ends > begins:
+            write(screen, row + 1, begins, line[begins:ends], curses.A_REVERSE)
 
 
 def _scroll_top(cursor: int, visible: int) -> int:
