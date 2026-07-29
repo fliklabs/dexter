@@ -319,11 +319,13 @@ and `examples/`. Its entry point is `./dx`, a launcher in the same shape as `./v
 unchanged by any of this; `./dx test` is the feedback loop, and reports pass rate, timing and
 coverage that the gate does not. `./dx verify` just shells out to the gate.
 
-**`./dx serve` is the only thing in this repository that binds a port.** It serves the
+**`./dx refapp web` is the only thing in this repository that binds a port.** It serves the
 reference application so it can be poked from a browser, and it lives in `tools/` rather than
 `examples/` for one reason: CI smoke-runs the example with no timeout, and a server would hang
-it. The example itself still terminates — `python -m examples.storefront` runs the same
-container as a worker. Its `uvicorn` dependency
+it. The example itself still terminates — `./dx refapp worker`, or
+`python -m examples.storefront`,
+runs the same container as a worker. Two commands because there are two application kinds, not
+because there are two services. Its `uvicorn` dependency
 is in the `tools` group, never in `[project.dependencies]` — `dexter.api` hands back an ASGI
 application and never runs one, so a consumer inherits no server from us.
 

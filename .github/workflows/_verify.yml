@@ -58,4 +58,5 @@ jobs:
         run: |
           ./dx
           ./dx --help
-          ./dx serve --help
+          ./dx refapp web --help
+          ./dx refapp worker --section modules

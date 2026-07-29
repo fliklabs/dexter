@@ -4,9 +4,13 @@ One runnable service, `storefront/`, composed from modules. It is the thing to c
 starting a service on dexter: take the directory, delete the two modules, write your own.
 
 ```bash
-uv run python -m examples.storefront    # run it as a worker, and read the transcript
-./dx serve                              # run it as a web service, and poke it
+./dx refapp worker      # run it as a worker, and read the transcript
+./dx refapp web         # run it as a web service, and poke it
 ```
+
+`./dx` with no arguments opens a menu with both. `./dx refapp worker --section <name>` runs
+one part of the transcript, and the worker is also `uv run python -m examples.storefront`,
+which is what CI smoke-runs.
 
 It is a **demonstration, not a test**. It asserts nothing and no test executes it. It is
 type-checked under full mypy strict and linted like the rest of the repository, which is its
@@ -68,16 +72,19 @@ module list buys: one description of the service, and no second list to keep in 
 
 | | Command | What it does |
 | --- | --- | --- |
-| Worker | `uv run python -m examples.storefront` | Resolves the buses, dispatches, prints, exits |
-| Web | `./dx serve` | Hands the container to `create_app` and binds a socket |
+| Worker | `./dx refapp worker` | Resolves the buses, dispatches, prints, exits |
+| Web | `./dx refapp web` | Hands the container to `create_app` and binds a socket |
 
-`./dx serve` prints its address and a live request log; `/docs` drives every module's routes
-from a browser, grouped by the tag each module registered them under. Ctrl+C stops it — from
-the menu that is a confirm modal and you land back in the CLI.
+`./dx refapp web` prints its address and a live request log; `/docs` drives every module's
+routes from a browser, grouped by the tag each module registered them under. Both are ordinary
+commands, so both are interruptible — Ctrl+C in the menu raises a confirm modal and lands you
+back in the CLI with the port released.
 
 ### What the worker transcript shows
 
-Each section shows one thing a signature cannot tell you. `--section` runs one on its own.
+Each section shows one thing a signature cannot tell you.
+`./dx refapp worker --section <name>` runs one on its own — the menu offers them as a
+picker.
 
 ```
 one module using another, through a contract

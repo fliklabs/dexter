@@ -10,7 +10,7 @@ from dexter.cli import register_command, use_cli
 from dexter.dependency_injection import Container, ContainerBuilder
 
 from .commands.checks import test, verify
-from .commands.serve import serve
+from .commands.refapp import web, worker
 
 
 def build_container() -> Container:
@@ -18,7 +18,10 @@ def build_container() -> Container:
     builder = ContainerBuilder()
     use_cli(builder)
 
-    register_command(builder, serve)
+    # Grouped, because they are two ways to run one service rather than two things the
+    # repository does. The group is created on first use; its help is the submenu's heading.
+    register_command(builder, web, group="refapp", help="Run the reference service.")
+    register_command(builder, worker, group="refapp")
     register_command(builder, test)
     register_command(builder, verify)
 

@@ -32,17 +32,17 @@ from dexter.dependency_injection import Container
 from examples.storefront.application import build_container
 
 
-@click.command("serve")
+@click.command("web")
 @click.option("--host", default="127.0.0.1", help="Address to bind.")
 @click.option("--port", default=8000, type=int, help="Port to bind.")
 @click.option("--open", "open_browser", is_flag=True, help="Open a browser on start.")
 @inject
-async def serve(scope: Container, host: str, port: int, *, open_browser: bool) -> int:
-    """Serve every reference application at once, for poking from a browser.
+async def web(scope: Container, host: str, port: int, *, open_browser: bool) -> int:
+    """Serve the reference service on a port, for poking from a browser.
 
-    `scope` is this command's own container, and supplies only the console. Each example
-    builds its own, which is the point — they have to stand alone as something a reader can
-    copy, and two of them use CQRS so they could not share a builder anyway.
+    The same container `./dx refapp worker` builds, put behind a socket instead. `scope` is this
+    command's own container and supplies only the console; the service builds its own, which
+    is the point — it has to stand alone as something a reader can copy.
     """
     console = await scope.resolve(CliConsole)
     container = build_container()

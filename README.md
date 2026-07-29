@@ -448,7 +448,7 @@ six lines above are.
 ### See it working
 
 ```bash
-./dx serve      # http://127.0.0.1:8000/docs
+./dx refapp web      # http://127.0.0.1:8000/docs
 ```
 
 The reference service behind a socket: path, query and body binding, mapped failures as problem
