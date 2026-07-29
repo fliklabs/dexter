@@ -263,9 +263,34 @@ uv sync                       # create .venv, install dev dependencies
 ./verify.sh --fix             # format, lint, type-check, test
 ./verify.sh                   # same, without writing changes
 uv run pytest tests/commons   # one module's tests
+./upgrade.sh                  # move every dependency forward, keep it only if the gate passes
 ```
 
 **A change is not done until `./verify.sh` exits 0.**
+
+### Upgrading dependencies
+
+`./upgrade.sh` resolves the newest version of everything, raises each declared floor to match,
+runs the gate, and keeps the result **only if it passes**. On any failure — including Ctrl+C —
+`pyproject.toml` and `uv.lock` are restored and the environment is re-synced, so a failed
+upgrade leaves nothing behind. `--lock-only` moves the lock without touching the floors,
+`--dry-run` shows what would change and puts it back.
+
+Three decisions in it are worth knowing:
+
+- **Floors come from `uv.lock`, never from an index.** uv has already resolved a set satisfying
+  `requires-python` and everything else; reusing its answer means a floor can only be a version
+  that demonstrably resolves. Asking PyPI separately invites writing one that nothing installs.
+- **It runs the whole gate, not just pytest.** `ruff` and `mypy` are themselves upgraded, and a
+  new release of either fails files no test would notice.
+- **Floors stay `>=`.** dexter is a library; one that pins exactly is one a consumer cannot
+  install beside anything that disagrees. The exact set is what `uv.lock` is for.
+
+It does not touch `.python-version` — that pin is the separate decision described above.
+
+**The floor table below is prose, and an upgrade does not rewrite it.** After a runtime floor
+moves, read it: the "why" column names specific versions, and those reasons do not
+automatically survive the number changing.
 
 ### The Python version is written once
 

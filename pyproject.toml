@@ -17,10 +17,10 @@ dynamic = ["version"]
 # (`Annotated[Model, Query()]`) arrived in 0.115.0, and `dexter.api` binds a whole request
 # model from the query string with them.
 dependencies = [
-    "click>=8.3",
-    "fastapi>=0.115",
-    "pydantic>=2.12",
-    "rich>=14",
+    "click>=8.4.2",
+    "fastapi>=0.141.0",
+    "pydantic>=2.13.4",
+    "rich>=15.0.0",
 ]
 classifiers = ["Typing :: Typed"]
 
@@ -64,17 +64,17 @@ dev = [
 # the only thing in this repository that starts a server, and it lives here rather than in
 # `[project.dependencies]` deliberately: `dexter.api` hands back an ASGI application and never
 # runs one, so a consumer inherits no server from us.
-tools = ["uvicorn>=0.34"]
+tools = ["uvicorn>=0.52.0"]
 test = [
     # `httpx` drives the ASGI app in-process, with no socket and no server. fastapi's own
     # `TestClient` is synchronous and runs the app on a portal thread, which would defeat the
     # per-task isolation `dexter.api` relies on.
-    "httpx>=0.28",
-    "pytest>=8.3",
-    "pytest-asyncio>=1.4",
-    "pytest-cov>=7",
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
 ]
-lint = ["ruff>=0.9", "mypy>=2.3"]
+lint = ["ruff>=0.16.0", "mypy>=2.3.0"]
 
 # ─────────────────────────────── ruff ────────────────────────────────
 [tool.ruff]
