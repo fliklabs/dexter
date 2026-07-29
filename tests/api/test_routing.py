@@ -165,21 +165,19 @@ class TestWriting:
 
 
 class TestValidation:
-    async def test_a_bad_path_parameter_is_reported_by_the_framework(
+    async def test_a_bad_path_parameter_names_the_field(
         self, rooms: ContainerBuilder
     ) -> None:
         async with serving(rooms) as client:
             response = await client.get("/rooms/not-a-number")
         assert response.status_code == HTTPStatus.UNPROCESSABLE_CONTENT
-        assert response.json()["detail"][0]["loc"] == ["path", "room_id"]
+        assert response.json()["errors"][0]["location"] == ["path", "room_id"]
 
-    async def test_a_bad_body_is_reported_by_the_framework(
-        self, rooms: ContainerBuilder
-    ) -> None:
+    async def test_a_bad_body_names_the_field(self, rooms: ContainerBuilder) -> None:
         async with serving(rooms) as client:
             response = await client.post("/bookings", json={"room_id": 3})
         assert response.status_code == HTTPStatus.UNPROCESSABLE_CONTENT
-        assert response.json()["detail"][0]["loc"] == ["body", "nights"]
+        assert response.json()["errors"][0]["location"] == ["body", "nights"]
 
     async def test_a_rule_on_the_whole_model_still_runs_when_the_path_splits_it(
         self, builder: ContainerBuilder

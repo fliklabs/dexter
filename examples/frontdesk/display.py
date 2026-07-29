@@ -32,5 +32,5 @@ def reply(status: int, body: object, detail: str = "") -> None:
     print(f"     {status}  {rendered}{f'  {detail}' if detail else ''}")
 
 
-_WIDTH = 72
+_WIDTH = 84
 """Where a rendered body is truncated, so one long line cannot wreck the transcript."""

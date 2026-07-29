@@ -106,11 +106,41 @@ exception hierarchy exists in order to be caught by base class — that is what 
 so registering a base has to cover its subclasses. The usual objection, that the winner depends
 on MRO order, does not bite: MRO order is what `except` already resolves in.
 
-`ErrorMap` ships **empty**. An unmapped exception is re-raised, not tidied into a 500 here: the
-framework's own handling, the consumer's exception handlers and every logging integration
-depend on seeing it. The framework's own `HTTPException` and `RequestValidationError` are
-checked for explicitly and never mapped, so a consumer mapping something broad cannot swallow
-them.
+The framework's own `HTTPException` and `RequestValidationError` are checked for explicitly and
+never mapped, so a consumer mapping something broad cannot capture them.
+
+## One error shape, and where each is rendered
+
+**Every failure a client can receive is `application/problem+json` with the same fields.** Left
+alone there would be four shapes — this module's for a mapped exception, the framework's for an
+`HTTPException`, a third for a validation failure, and `text/plain` for anything unhandled —
+and a caller would need a parser per layer. `http/problem.py::install` replaces the framework's
+own handlers so they render the same body, and `create_app` calls it.
+
+`install` replaces **only** the framework's defaults, recognised by identity, so a consumer who
+installed their own keeps it. Its one trap: the default handler is registered under
+**starlette's** `HTTPException`, not the one `fastapi` re-exports — different classes, the
+latter subclassing the former. Keying on the subclass looks correct, matches nothing, and
+silently leaves the framework's handler in place.
+
+## `ErrorMap` ships empty, and the 500 is rendered from the outside
+
+These are the same decision. `_fail` **returns** a response for a mapped exception, and a
+returned response does not propagate — so mapping an exception silences it. An unmapped one is
+re-raised instead, and the handler registered under the `Exception` key renders the identical
+problem+json body and then **re-raises again**, because that is what the routing layer does
+with `500`/`Exception` handlers: it hands them to the outermost error middleware, which sends
+the response and continues to raise so a server can log.
+
+So an unhandled failure is answered *and* reported. That is why nothing is pre-registered —
+`use_api` adds no default mapping, not even for `DisposalError`. Mapping it would produce a
+byte-identical response and cost the traceback naming which handler failed to settle.
+
+`detail` for an unmapped failure is a fixed phrase and the exception is never read. Registering
+one with `register_error` is the author's statement that its message may be shown; nothing else
+has been through that judgement, and `str()` of an arbitrary exception carries connection
+strings and file paths. `tests/api/test_errors.py` pins both halves — that the body says
+nothing, and that the exception still propagates.
 
 ## Names carry an `Api` prefix where `dexter.cqrs` owns the plain one
 

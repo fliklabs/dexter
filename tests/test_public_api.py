@@ -31,6 +31,7 @@ from dexter.api import (
     InvalidApiHandlerError,
     InvalidErrorMappingError,
     InvalidExposureError,
+    InvalidField,
     Invocation,
     NoRequestContextError,
     PayloadSource,
@@ -378,7 +379,15 @@ class TestApiSurface:
         assert {ExposureRegistry, ExposureRecord, ErrorMap, ErrorMapping, ApiPipeline}
 
     def test_the_error_body_is_exported(self) -> None:
-        assert set(ErrorResponse.model_fields) == {"title", "status", "detail"}
+        # One shape for every failure, whichever layer raised it. `errors` is an RFC 9457
+        # extension member, present only on a validation failure.
+        assert set(ErrorResponse.model_fields) == {
+            "title",
+            "status",
+            "detail",
+            "errors",
+        }
+        assert set(InvalidField.model_fields) == {"location", "message", "kind"}
 
     def test_every_error_is_exported(self) -> None:
         errors = {

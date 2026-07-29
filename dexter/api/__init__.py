@@ -73,6 +73,7 @@ from .models import ApiHandler as ApiHandler
 from .models import ApiMiddleware as ApiMiddleware
 from .models import ApiNext as ApiNext
 from .models import ErrorResponse as ErrorResponse
+from .models import InvalidField as InvalidField
 from .models import Invocation as Invocation
 from .pipeline import ApiPipeline as ApiPipeline
 from .registry import ErrorMap as ErrorMap

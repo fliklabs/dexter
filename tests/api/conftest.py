@@ -239,14 +239,28 @@ def rooms(builder: ContainerBuilder) -> ContainerBuilder:
 
 @asynccontextmanager
 async def serving(
-    builder: ContainerBuilder, *, prefix: str = "", app: FastAPI | None = None
+    builder: ContainerBuilder,
+    *,
+    prefix: str = "",
+    app: FastAPI | None = None,
+    raise_app_exceptions: bool = True,
 ) -> AsyncIterator[httpx.AsyncClient]:
-    """Build the container, mount the app, and yield a client speaking to it in process."""
+    """Build the container, mount the app, and yield a client speaking to it in process.
+
+    `raise_app_exceptions=False` makes the client return the 500 an unhandled failure produced
+    instead of re-raising the failure itself. Both halves are real and a test can only observe
+    one at a time: the error middleware sends its response *and then* re-raises, which is what
+    lets a server log what went wrong. The default keeps the exception, because a test that
+    quietly swallowed one would hide exactly the bug the suite exists to catch.
+    """
     container = builder.build()
     try:
         built = await create_app(container, prefix=prefix, app=app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=built), base_url="http://api"
+            transport=httpx.ASGITransport(
+                app=built, raise_app_exceptions=raise_app_exceptions
+            ),
+            base_url="http://api",
         ) as client:
             yield client
     finally:

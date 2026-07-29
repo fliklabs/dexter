@@ -27,23 +27,21 @@ it raises. Declining that outright is better than supporting it halfway.
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Request, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from starlette.responses import JSONResponse
+from starlette.exceptions import HTTPException
 
 from dexter.dependency_injection import Container
 
 from ..context import RequestContext, bind_request
 from ..exposure import HttpExposure
-from ..models import ErrorResponse, Invocation
+from ..models import Invocation
 from ..pipeline import ApiPipeline
 from ..registry import ErrorMap, ExposureRecord
+from .problem import problem
 from .request import context_from
 from .signature import HTTP_REQUEST, HTTP_RESPONSE, build_assembler, build_signature
-
-PROBLEM_JSON = "application/problem+json"
-"""Media type for a mapped failure, per RFC 9457."""
 
 
 class _Route:
@@ -134,28 +132,32 @@ async def _serve(
 
 
 async def _fail(container: Container, error: Exception) -> Response:
-    """Turn a failure into a response, or let it through untouched.
+    """Turn a mapped failure into a response, and let everything else through untouched.
 
-    Three things are deliberately not caught. The framework's own exceptions are its business
-    and the consumer may have replaced their handlers. And an exception nobody mapped is
-    re-raised rather than tidied into a 500 here: the framework's error handling, the
-    consumer's own exception handlers, and every logging integration all depend on seeing it.
-    A library that turns each of its consumers' bugs into a neat response is a library that
-    hides them.
+    Two things are deliberately not answered here, and both still end up as problem details —
+    just rendered further out, by the handlers `problem.install` put on the application.
+
+    The framework's own exceptions are its business, and are checked for explicitly rather than
+    left to go unmapped, so that a consumer who maps something broad cannot accidentally
+    capture the framework's signalling.
+
+    An exception nobody mapped is **re-raised rather than tidied into a 500 here**, and that is
+    the whole point of doing it there instead. Answering it would mean returning a response,
+    and a returned response does not propagate — the consumer's own exception handlers and
+    every logging integration would never see the failure. Re-raising reaches the outermost
+    error middleware, which renders the same body and then re-raises again for the server to
+    log. A library that turns each of its consumers' bugs into a neat response is a library
+    that hides them; this one renders the neat response *and* lets the bug through.
     """
     if isinstance(error, HTTPException | RequestValidationError):
-        # Checked explicitly rather than left to go unmapped, so that a consumer who maps
-        # something broad cannot accidentally swallow the framework's own signalling.
         raise error
 
     mapping = (await container.resolve(ErrorMap)).find(error)
     if mapping is None:
         raise error
 
-    body = ErrorResponse.of(mapping.status, mapping.title, error)
-    return JSONResponse(
-        body.model_dump(), status_code=int(mapping.status), media_type=PROBLEM_JSON
-    )
+    # A mapped exception is one whose message the author has said may be shown.
+    return problem(int(mapping.status), mapping.title, str(error))
 
 
 def _apply(

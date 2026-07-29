@@ -124,7 +124,9 @@ async def show_errors(app: Application, container: Container) -> None:  # noqa: 
     )
     reply(answer.status, answer.body)
     note("This one never reached a handler: `nights` is declared `le=30`, so the")
-    note("framework refused it and no request scope was ever opened.")
+    note("framework refused it and no request scope was ever opened — and it still")
+    note("answers in the shape the other two did, with an `errors` member naming the")
+    note("field. One media type and one set of fields, whichever layer failed.")
 
 
 async def show_cqrs(app: Application, container: Container) -> None:

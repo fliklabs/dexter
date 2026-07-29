@@ -21,6 +21,7 @@ from ..errors import ApiNotWiredError
 from ..exposure import HttpExposure
 from ..registry import ExposureRegistry
 from .endpoint import build_endpoint
+from .problem import install
 
 
 async def create_app(
@@ -64,6 +65,10 @@ async def create_app(
     """
     registry = await _registry(container)
     target = FastAPI() if app is None else app
+
+    # So that a failure the framework reports answers in the same shape a mapped one does.
+    # Replaces only the framework's own defaults; see `problem.install`.
+    install(target)
 
     for record, exposure in registry.of(HttpExposure):
         target.add_api_route(

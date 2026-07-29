@@ -169,6 +169,37 @@ class TestSettling:
             with pytest.raises(DisposalError):
                 await client.get("/burn")
 
+    async def test_a_failure_while_settling_is_answered_as_problem_details(
+        self, builder: ContainerBuilder
+    ) -> None:
+        """Unmapped, so it is answered *and* still propagates — the same body either way.
+
+        This is why `ErrorMap` ships empty. Pre-registering `DisposalError` would produce this
+        exact response, and would stop it reaching a logger; leaving it unmapped costs the
+        caller nothing and keeps the traceback that names the failing handler.
+        """
+
+        class BurnHandler:
+            def __init__(self, failing: Failing) -> None:
+                self.failing = failing
+
+            async def handle(self, request: Ping) -> str:
+                return "ok"
+
+        builder.register(Failing).to(Failing, scope=Scope.SCOPED, dispose=Failing.burn)
+        register_handler(
+            builder,
+            BurnHandler,
+            HttpExposure(method=HTTPMethod.GET, path="/burn"),
+            scope=Scope.TRANSIENT,
+        )
+        async with serving(builder, raise_app_exceptions=False) as client:
+            response = await client.get("/burn")
+
+        assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+        assert response.headers["content-type"].startswith("application/problem+json")
+        assert "could not settle" not in response.text
+
     async def test_a_failure_while_settling_can_be_mapped(
         self, builder: ContainerBuilder
     ) -> None:

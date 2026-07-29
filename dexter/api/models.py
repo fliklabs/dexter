@@ -90,13 +90,40 @@ class ApiMiddleware(Protocol):
         ...
 
 
-class ErrorResponse(BaseModel):
-    """What a mapped failure is serialised to.
+class InvalidField(BaseModel):
+    """One rejected field of a request.
 
-    Shaped after RFC 9457's problem details — `title` for the class of failure, `status` for
-    the code, `detail` for this particular occurrence — and served as
-    `application/problem+json`. Following the standard rather than inventing an envelope means
-    clients that already understand one need no special case for dexter.
+    dexter's own shape rather than the validator's raw report: that carries a link to the
+    validation library's documentation and an echo of the offending input, neither of which a
+    caller needs, and it abbreviates the three things they do.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    location: tuple[str | int, ...]
+    """Where the field was read from, most general first: `("body", "nights")`.
+
+    An integer indexes into a list, so `("body", "rooms", 0, "number")` is reachable.
+    """
+
+    message: str
+    """What is wrong with it, in words."""
+
+    kind: str
+    """Which rule it broke, as a stable token a client can branch on."""
+
+
+class ErrorResponse(BaseModel):
+    """What a failure is serialised to — every failure, whatever raised it.
+
+    RFC 9457 problem details: `title` for the class of failure, `status` for the code, `detail`
+    for this particular occurrence, served as `application/problem+json`. Following the
+    standard rather than inventing an envelope means a client that already understands one
+    needs no special case for dexter, and using it for *every* error means they need only one
+    parser rather than one per layer that might fail.
+
+    `type` is deliberately absent, which the specification allows: when it is not present its
+    value is assumed to be `about:blank`.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -105,16 +132,44 @@ class ErrorResponse(BaseModel):
     """What kind of failure this is. Stable across occurrences."""
 
     status: int
-    """The HTTP status, repeated in the body as the specification requires."""
+    """The HTTP status. Advisory, per the specification — the real one is on the response."""
 
     detail: str
     """What went wrong this time."""
 
+    errors: tuple[InvalidField, ...] | None = None
+    """Which fields were rejected, when that is what happened.
+
+    An extension member, which the specification permits. `None` for every other kind of
+    failure, and dropped from the JSON rather than serialised as null, so an ordinary error
+    body carries exactly three fields.
+    """
+
     @classmethod
-    def of(cls, status: HTTPStatus, title: str | None, error: Exception) -> Self:
-        """Build a body for `error`, defaulting the title to the status's own phrase."""
+    def of(
+        cls,
+        status: int,
+        title: str | None,
+        detail: str,
+        errors: tuple[InvalidField, ...] | None = None,
+    ) -> Self:
+        """Build a body, defaulting the title to the status's standard phrase.
+
+        Takes a plain `int`, not an `HTTPStatus`. A caller is free to answer with a code the
+        standard does not name — some gateways and some internal conventions do — and the code
+        they chose has to survive, so it is never rounded to one this module recognises.
+        """
         return cls(
-            title=title if title is not None else status.phrase,
-            status=int(status),
-            detail=str(error),
+            title=title if title is not None else describe_status(status),
+            status=status,
+            detail=detail,
+            errors=errors,
         )
+
+
+def describe_status(status: int, /) -> str:
+    """The standard phrase for `status`, or a neutral word when it names no standard one."""
+    try:
+        return HTTPStatus(status).phrase
+    except ValueError:
+        return "Error"

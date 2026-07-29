@@ -385,9 +385,31 @@ register_api_middleware(builder, RequireTenant, scope=Scope.SCOPED)
 register_error(builder, NotAuthenticatedError, status=HTTPStatus.UNAUTHORIZED)
 ```
 
-`register_error` maps a domain exception — and its subclasses — to a status, served as RFC 9457
-problem details. **An exception nobody mapped is re-raised, not tidied into a 500**, so your
-logging still sees it.
+`register_error` maps a domain exception — and its subclasses — to a status.
+
+**Every failure answers in one shape**: `application/problem+json`, per RFC 9457. That holds
+whichever layer failed, so a client needs one parser rather than one per kind of thing that can
+go wrong:
+
+| What failed | Status | Body |
+| --- | --- | --- |
+| A mapped domain exception | as registered | `{title, status, detail}` |
+| Request validation | 422 | the same, plus `errors` naming each rejected field |
+| A raised `HTTPException` | as raised | the same, keeping its detail and headers |
+| Anything nobody anticipated | 500 | the same, saying nothing about itself |
+
+The last row is deliberate twice over. **The body says nothing** — mapping an exception is your
+statement that its message is safe to show, and `str()` of an unanticipated one can carry a
+connection string. And **the exception still propagates**, so your logs and error tracker get
+the full traceback: dexter renders the response from the outermost error handler, which sends
+it and then re-raises. Answering a failure and silencing it are different things, and only
+mapping does the second.
+
+That is also why nothing is mapped for you — including `DisposalError`, the failure you get
+when a handler returned cleanly but the work it dispatched did not settle. Pre-registering it
+would produce a byte-identical response and cost you the traceback.
+
+If you already installed your own exception handler, dexter leaves it alone.
 
 | Where a field comes from | When |
 | --- | --- |
