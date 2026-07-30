@@ -124,9 +124,13 @@ scrolls the view out from under the text being selected.
 simply one more code that is not an arrow key — so the finished-output pager's "any other key
 returns" sent a reader who reached for the wheel straight back to the menu, taking the output they
 were reading with it. Scrolling is the one gesture that cannot mean "I am finished". Any screen
-that reads keys and grew a catch-all needs the same care, and it must *fetch* the report
-(`mouse_report`) even when it intends to ignore it: an unfetched report stays queued and is
-decoded as stray keys on the next read.
+that reads keys and grew a catch-all needs the same care.
+
+**Ignoring a report costs nothing; reading one late loses it.** A `KEY_MOUSE` whose report is
+never fetched is simply discarded — measured under a pty, the keys after it arrive clean, so the
+screens that have no use for a mouse are right to say nothing about one. What does not work is
+fetching later: the report is gone by the next `getch`, so a screen that wants the direction must
+take it in the same turn.
 
 `Mouse` and `mouse_report` live in `rendering` rather than `pane` for an ordinary reason —
 `pane` imports `screens`, so `screens` cannot import `pane`, and the pager needs them too.

@@ -203,9 +203,9 @@ def output_screen(screen: Any, title: str, text: str) -> None:
             continue
 
         if key == curses.KEY_MOUSE:
-            # Fetched whether or not it turns out to be a wheel: the report has to be taken
-            # before the next `getch` or it is left in the queue to be decoded as stray keys.
-            # Nothing is dragged here, so `dragging` is settled — this screen has no selection.
+            # Fetched because the direction is in the report and nowhere else — and fetched
+            # *now*, because a report not taken before the next `getch` is gone. Nothing is
+            # dragged here, so `dragging` is settled: this screen has no selection.
             report = mouse_report(screen)
             turn = 0 if report is None else report.wheel(dragging=False)
             offset = clamp(offset + turn * WHEEL_LINES, len(lines), visible)
