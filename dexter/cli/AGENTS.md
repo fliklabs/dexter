@@ -99,6 +99,38 @@ command of the event loop.
 without it a drain would swallow every key the test meant for later screens. One per turn is
 the default; raise it to model input arriving faster than the loop turns.
 
+## The wheel: a tick down and a drag are the same event
+
+Two facts about the wheel, both measured by feeding raw legacy reports through ncurses under a
+pty rather than reasoned about, because both are the opposite of what the constants suggest.
+
+**`BUTTON5_PRESSED` frequently does not exist.** It is defined only when ncurses was built with
+`NCURSES_MOUSE_VERSION` 2. Version 1 gives each of four buttons six mask bits and spends the next
+three on `BUTTON_CTRL`, `BUTTON_SHIFT` and `BUTTON_ALT` — there is no bit left for a fifth
+button. **macOS ships that build**, so `rendering.WHEEL_DOWN` is `0` there: a mask matching
+nothing, on the platform most likely to be running the menu.
+
+**What arrives instead is a bare `REPORT_MOUSE_POSITION` — the identical state a drag's motion
+produces.** No amount of looking at one report can tell them apart. What separates them is
+context, and only one thing supplies it: this menu asks for mode 1002, *button-event* tracking,
+so motion is reported only while a button is held. A bare motion report with no drag in progress
+therefore cannot be motion, and `Mouse.wheel(dragging=...)` is where that reasoning lives.
+
+Both directions of getting it wrong are worth naming, because each looks like a different bug:
+read as motion, a wheel tick extends a selection nobody is making; read as a wheel, a drag
+scrolls the view out from under the text being selected.
+
+**A mouse report must never dismiss a screen.** `getch` announces a tick as `KEY_MOUSE`, which is
+simply one more code that is not an arrow key — so the finished-output pager's "any other key
+returns" sent a reader who reached for the wheel straight back to the menu, taking the output they
+were reading with it. Scrolling is the one gesture that cannot mean "I am finished". Any screen
+that reads keys and grew a catch-all needs the same care, and it must *fetch* the report
+(`mouse_report`) even when it intends to ignore it: an unfetched report stays queued and is
+decoded as stray keys on the next read.
+
+`Mouse` and `mouse_report` live in `rendering` rather than `pane` for an ordinary reason —
+`pane` imports `screens`, so `screens` cannot import `pane`, and the pager needs them too.
+
 **Escape sequences arrive in pieces while polling, and are put back together in `pane`.**
 `nodelay` tells ncurses to return what it has rather than wait, and an arrow key is three bytes:
 it turns up as `27, 91, 65` instead of `KEY_UP`. Mouse reports survive only because ncurses

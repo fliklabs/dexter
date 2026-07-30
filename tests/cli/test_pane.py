@@ -11,12 +11,12 @@ from dexter.cli.interactive.pane import (
     COPIED,
     FASTEST,
     UNCOPIED,
-    Mouse,
     Pane,
     pending,
 )
+from dexter.cli.interactive.rendering import WHEEL_LINES, Mouse
 
-from .screen import FakeScreen, drag, press, release
+from .screen import FakeScreen, drag, press, release, wheel_down, wheel_up
 
 LINES = [f"line {index}" for index in range(20)]
 VISIBLE = 10
@@ -521,3 +521,146 @@ class TestScriptedReports:
             (False, False),
             (False, True),
         ]
+
+
+class TestWheelThroughTheReadPath:
+    """End to end from `getch`, because the wheel's whole problem was where it arrives.
+
+    A tick is announced as `KEY_MOUSE` and its state has to be fetched separately, which is the
+    step the finished-output pager was missing when it read a wheel as "any other key".
+    """
+
+    def test_a_scripted_tick_up_arrives_as_a_report(self) -> None:
+        screen = FakeScreen([wheel_up(3, 4)])
+        screen.nodelay(True)
+
+        events = pending(screen)
+
+        assert len(events) == 1
+        event = events[0]
+        assert isinstance(event, Mouse)
+        assert event.wheel(dragging=False) == -1
+
+    def test_a_scripted_tick_down_arrives_as_a_report(self) -> None:
+        screen = FakeScreen([wheel_down(3, 4)])
+        screen.nodelay(True)
+
+        events = pending(screen)
+
+        assert len(events) == 1
+        event = events[0]
+        assert isinstance(event, Mouse)
+        assert event.wheel(dragging=False) == 1
+
+    def test_a_burst_of_ticks_all_arrive(self) -> None:
+        """A wheel emits faster than the loop turns, so the backlog has to be drained."""
+        screen = FakeScreen([wheel_up() for _ in range(5)])
+        screen.nodelay(True)
+        screen.keys_per_turn = 5
+
+        events = pending(screen)
+
+        assert len(events) == 5
+
+
+class TestWheelDecoding:
+    """The one rule that cannot be read off a single report.
+
+    Wheel down and a drag's motion arrive as the identical state on an ncurses built with
+    `NCURSES_MOUSE_VERSION` 1, so the only thing separating them is whether a button is held.
+    """
+
+    def test_button_four_is_a_tick_up(self) -> None:
+        assert Mouse(1, 1, curses.BUTTON4_PRESSED).wheel(dragging=False) == -1
+
+    def test_bare_motion_with_no_drag_is_a_tick_down(self) -> None:
+        assert Mouse(1, 1, curses.REPORT_MOUSE_POSITION).wheel(dragging=False) == 1
+
+    def test_bare_motion_during_a_drag_is_motion(self) -> None:
+        assert Mouse(1, 1, curses.REPORT_MOUSE_POSITION).wheel(dragging=True) == 0
+
+    def test_a_press_is_not_a_wheel(self) -> None:
+        assert Mouse(1, 1, curses.BUTTON1_PRESSED).wheel(dragging=False) == 0
+
+    def test_a_release_is_not_a_wheel(self) -> None:
+        assert Mouse(1, 1, curses.BUTTON1_RELEASED).wheel(dragging=False) == 0
+
+    def test_a_tick_up_is_a_tick_up_even_mid_drag(self) -> None:
+        """Only the ambiguous direction needs the context; button 4 says so itself."""
+        assert Mouse(1, 1, curses.BUTTON4_PRESSED).wheel(dragging=True) == -1
+
+
+class TestWheelScrolling:
+    def test_a_tick_up_pins_the_view_off_the_end(self) -> None:
+        pane = Pane()
+
+        _wheel_up(pane)
+
+        assert pane.offset == len(LINES) - VISIBLE - WHEEL_LINES
+        assert not pane.following
+
+    def test_ticks_up_accumulate(self) -> None:
+        pane = Pane()
+
+        _wheel_up(pane)
+        _wheel_up(pane)
+
+        assert pane.offset == len(LINES) - VISIBLE - 2 * WHEEL_LINES
+
+    def test_a_tick_up_cannot_go_above_the_first_line(self) -> None:
+        pane = Pane()
+
+        for _ in range(len(LINES)):
+            _wheel_up(pane)
+
+        assert pane.offset == 0
+
+    def test_wheeling_back_down_resumes_following(self) -> None:
+        """`None` rather than the last line, so new output is followed again."""
+        pane = Pane()
+        _wheel_up(pane)
+
+        _wheel_down(pane)
+
+        assert pane.offset is None
+        assert pane.following
+
+    def test_a_tick_down_while_already_following_changes_nothing(self) -> None:
+        pane = Pane()
+
+        _wheel_down(pane)
+
+        assert pane.offset is None
+
+    def test_a_tick_does_not_begin_a_selection(self) -> None:
+        pane = Pane()
+
+        _wheel_up(pane)
+
+        assert pane.selection is None
+
+    def test_motion_mid_drag_still_extends_rather_than_scrolls(self) -> None:
+        """The collision, from the other side: a held drag must not be read as a wheel."""
+        pane = Pane()
+        _press(pane, 2, 0)
+        pinned = pane.offset
+
+        _drag(pane, 4, 5)
+
+        assert pane.offset == pinned
+        assert pane.selection is not None
+
+
+def _wheel_up(pane: Pane) -> None:
+    pane.mouse(
+        _mouse(1, 0, curses.BUTTON4_PRESSED), lines=LINES, visible=VISIBLE, now=0.0
+    )
+
+
+def _wheel_down(pane: Pane) -> None:
+    pane.mouse(
+        _mouse(1, 0, curses.REPORT_MOUSE_POSITION),
+        lines=LINES,
+        visible=VISIBLE,
+        now=0.0,
+    )

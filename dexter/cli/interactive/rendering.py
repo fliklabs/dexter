@@ -10,7 +10,7 @@ import curses
 import os
 import sys
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, NamedTuple
 
 # ncurses waits about a second after a bare ESC to see whether it is the start of an escape
 # sequence. Left alone, "ESC goes back" feels broken. Set before any curses call.
@@ -132,6 +132,95 @@ def ask(sequence: str) -> None:
     with contextlib.suppress(OSError, ValueError):
         sys.stdout.write(sequence)
         sys.stdout.flush()
+
+
+WHEEL_LINES = 3
+"""Lines one wheel tick moves. What a terminal's own scrollback does, so it feels the same.
+
+Here rather than beside either caller because both the live pane and the finished-output pager
+scroll by it, and a wheel that moved a different distance depending on whether the command had
+finished yet would be the kind of difference nobody can quite name.
+"""
+
+WHEEL_UP = curses.BUTTON4_PRESSED
+"""Wheel up. The one wheel direction every ncurses build can name."""
+
+WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0)
+"""Wheel down, **where it exists at all** — and on a great many builds it does not.
+
+`BUTTON5_PRESSED` is only defined when ncurses was compiled with `NCURSES_MOUSE_VERSION` 2.
+Version 1 has six mask bits for each of four buttons and then spends the next three on
+`BUTTON_CTRL`, `BUTTON_SHIFT` and `BUTTON_ALT`, so there is no bit left to mean "button 5".
+macOS ships exactly that build, which makes this `0` — a mask matching nothing — on the platform
+most likely to be running the menu.
+
+What arrives instead is measured rather than assumed: feeding the legacy report for wheel down
+(`\\033[M` with `Cb` 97) through ncurses on such a build yields a bare `REPORT_MOUSE_POSITION`,
+the *same* state a drag's motion produces. See `wheel` for how the two are told apart.
+"""
+
+
+class Mouse(NamedTuple):
+    """One mouse report, in screen coordinates."""
+
+    row: int
+    column: int
+    state: int
+
+    @property
+    def pressed(self) -> bool:
+        """Whether the button went down."""
+        return bool(self.state & curses.BUTTON1_PRESSED)
+
+    @property
+    def released(self) -> bool:
+        """Whether the button came up."""
+        return bool(self.state & curses.BUTTON1_RELEASED)
+
+    def wheel(self, *, dragging: bool) -> int:
+        """Lines to scroll: -1 up, 1 down, 0 when this is not a wheel tick at all.
+
+        `dragging` is not a convenience — it is the only thing that can answer the question on a
+        `NCURSES_MOUSE_VERSION` 1 build, where wheel down and a drag's motion arrive as the
+        identical `REPORT_MOUSE_POSITION` state (see `WHEEL_DOWN`). What separates them is
+        context: this menu asks for mode 1002, *button-event* tracking, so motion is only ever
+        reported while a button is held. A bare motion report with no drag in progress therefore
+        cannot be motion, and a wheel is the only thing left it can be.
+
+        Getting this wrong in either direction is worse than it sounds. Read as motion, a wheel
+        tick extends a selection nobody is making; read as a wheel, a drag scrolls the view out
+        from under the text being selected.
+        """
+        if self.state & WHEEL_UP:
+            return -1
+        if WHEEL_DOWN and self.state & WHEEL_DOWN:
+            return 1
+        if not dragging and self.state == curses.REPORT_MOUSE_POSITION:
+            return 1
+        return 0
+
+
+def mouse_report(screen: Any) -> Mouse | None:
+    """Fetch the report `KEY_MOUSE` announced, or `None` if it cannot be read.
+
+    **A `KEY_MOUSE` must be followed by this before the next `getch`**, or the report is lost and
+    the key code was noise. That ordering is why every screen reading input has to know the
+    mouse exists, even the ones with nothing to do with one.
+
+    `getmouse` raises on a terminal that reported a mouse event it then cannot describe, which is
+    rare and entirely uninteresting — the event is dropped rather than allowed to take the menu
+    down with it.
+
+    Asked of the window first and the module second because curses puts it on the module, where
+    nothing can stand in for it. A window that offers its own is a stand-in, and that is the only
+    way this is testable without a terminal.
+    """
+    getmouse = getattr(screen, "getmouse", None) or curses.getmouse
+    try:
+        _, column, row, _, state = getmouse()
+    except curses.error:
+        return None
+    return Mouse(row=row, column=column, state=state)
 
 
 def show_cursor(*, visible: bool) -> None:

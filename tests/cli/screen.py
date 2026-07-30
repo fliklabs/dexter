@@ -34,6 +34,22 @@ def drag(row: int, column: int) -> Report:
     return Report(row, column, curses.REPORT_MOUSE_POSITION)
 
 
+def wheel_up(row: int = 1, column: int = 0) -> Report:
+    """One wheel tick upwards."""
+    return Report(row, column, curses.BUTTON4_PRESSED)
+
+
+def wheel_down(row: int = 1, column: int = 0) -> Report:
+    """One wheel tick downwards, as the platform this runs on actually reports it.
+
+    `REPORT_MOUSE_POSITION` and not `BUTTON5_PRESSED`, which does not exist on an ncurses built
+    with `NCURSES_MOUSE_VERSION` 1 — macOS included. Measured by feeding the legacy report
+    through ncurses rather than assumed; see `rendering.WHEEL_DOWN`. It is deliberately the same
+    state `drag` produces, because that collision is the thing worth having a test for.
+    """
+    return Report(row, column, curses.REPORT_MOUSE_POSITION)
+
+
 def release(row: int, column: int) -> Report:
     """The button coming up at a cell."""
     return Report(row, column, curses.BUTTON1_RELEASED)

@@ -6,6 +6,7 @@ import click
 import pytest
 
 from dexter.cli.interactive import Menu
+from dexter.cli.interactive.rendering import WHEEL_LINES
 from dexter.cli.interactive.screens import (
     confirm_screen,
     list_screen,
@@ -17,7 +18,15 @@ from dexter.cli.interactive.screens import (
 from dexter.cli.models import read_fields
 
 from .conftest import choose, count, greet
-from .screen import FakeScreen, OutOfKeysError, fake_curs_set
+from .screen import (
+    FakeScreen,
+    OutOfKeysError,
+    fake_curs_set,
+    press,
+    release,
+    wheel_down,
+    wheel_up,
+)
 
 
 def make_tree() -> click.Group:
@@ -326,6 +335,69 @@ class TestOutputScreenScrolling:
 
         assert "19" in screen.last_text()
         assert "\n0\n" not in screen.last_text()
+
+
+NUMBERED_LINES = 20
+NUMBERED = "\n".join(str(number) for number in range(NUMBERED_LINES))
+"""Output whose every line names its own index, so the top row says where the view is."""
+
+VISIBLE_ROWS = 4
+"""Body rows in a `size=(6, 80)` window: six minus the header and the footer."""
+
+
+class TestOutputScreenWheel:
+    """The wheel must scroll a finished command's output, and must never dismiss it.
+
+    This is the bug this class exists for: `getch` announces a wheel tick as `KEY_MOUSE`, one
+    more code that is not an arrow key — so "any other key returns" sent a reader who reached for
+    the wheel back to the menu, taking the output they were reading with it.
+    """
+
+    def test_a_tick_does_not_dismiss_the_screen(self) -> None:
+        screen = FakeScreen([wheel_down(), wheel_up(), ord("q")])
+
+        output_screen(screen, "greet", "hello\nworld")
+
+        # Three reads: two ticks that were handled, then the key that actually dismissed it.
+        assert screen.reads == 3
+
+    def test_a_tick_down_scrolls_down(self) -> None:
+        """`screen.last[1]` is the first output row, under the header."""
+        screen = FakeScreen([wheel_down(), ord("q")], size=(6, 80))
+
+        output_screen(screen, "greet", NUMBERED)
+
+        assert screen.last[1] == str(WHEEL_LINES)
+
+    def test_a_tick_up_scrolls_back(self) -> None:
+        # A page down first, so there is somewhere above to scroll back to.
+        screen = FakeScreen(["pgdn", wheel_up(), ord("q")], size=(6, 80))
+
+        output_screen(screen, "greet", NUMBERED)
+
+        assert screen.last[1] == str(VISIBLE_ROWS - WHEEL_LINES)
+
+    def test_ticking_up_at_the_top_stays_at_the_top(self) -> None:
+        screen = FakeScreen([wheel_up()] * 5 + [ord("q")], size=(6, 80))
+
+        output_screen(screen, "greet", NUMBERED)
+
+        assert screen.last[1] == "0"
+
+    def test_ticking_down_past_the_end_stays_at_the_end(self) -> None:
+        screen = FakeScreen([wheel_down()] * 20 + [ord("q")], size=(6, 80))
+
+        output_screen(screen, "greet", NUMBERED)
+
+        assert screen.last[1] == str(NUMBERED_LINES - VISIBLE_ROWS)
+
+    def test_a_click_does_not_dismiss_the_screen_either(self) -> None:
+        """Nothing is selectable here, but a stray click must not throw the output away."""
+        screen = FakeScreen([press(2, 0), release(2, 0), ord("q")])
+
+        output_screen(screen, "greet", "hello\nworld")
+
+        assert screen.reads == 3
 
 
 class TestLiveScreen:

@@ -25,8 +25,16 @@ from ..console import CliConsole
 from ..models import read_fields, shell_command, to_argv
 from ..runner import Capture, Outcome, invoke
 from .menu import Menu
-from .pane import Mouse, Pane, pending
-from .rendering import INTERRUPT, Modal, Quit, body_height, polling, terminal
+from .pane import Pane, pending
+from .rendering import (
+    INTERRUPT,
+    Modal,
+    Mouse,
+    Quit,
+    body_height,
+    polling,
+    terminal,
+)
 from .screens import (
     SCROLL_KEYS,
     confirm_screen,

@@ -12,10 +12,17 @@ becoming a rule someone has to remember.
 """
 
 import curses
-from typing import Any, NamedTuple
+from typing import Any
 
 from .. import clipboard
-from .rendering import ESC, INTERRUPT, Toast
+from .rendering import (
+    ESC,
+    INTERRUPT,
+    WHEEL_LINES,
+    Mouse,
+    Toast,
+    mouse_report,
+)
 from .screens import clamp, scrolled
 from .selection import Point, Selection
 
@@ -32,24 +39,6 @@ window from flinging the view past everything the reader was dragging towards.
 
 COPIED = "Copied to clipboard"
 UNCOPIED = "Could not reach the clipboard"
-
-
-class Mouse(NamedTuple):
-    """One mouse report, in screen coordinates."""
-
-    row: int
-    column: int
-    state: int
-
-    @property
-    def pressed(self) -> bool:
-        """Whether the button went down."""
-        return bool(self.state & curses.BUTTON1_PRESSED)
-
-    @property
-    def released(self) -> bool:
-        """Whether the button came up."""
-        return bool(self.state & curses.BUTTON1_RELEASED)
 
 
 type Event = int | Mouse
@@ -101,8 +90,17 @@ class Pane:
     def mouse(
         self, event: Mouse, *, lines: list[str], visible: int, now: float
     ) -> None:
-        """Apply one mouse report: begin, extend or finish a drag."""
-        if event.pressed:
+        """Apply one mouse report: scroll the wheel, or begin, extend or finish a drag.
+
+        The wheel is asked about first, and has to be: on a mouse-version 1 build a wheel tick
+        down and a drag's motion are the same state, and only `Mouse.wheel` knowing whether a
+        drag is in progress can separate them. Asking in the other order would read every wheel
+        tick as motion.
+        """
+        turn = event.wheel(dragging=self.drag is not None)
+        if turn:
+            self._scroll(turn * WHEEL_LINES, total=len(lines), visible=visible)
+        elif event.pressed:
             self._begin(event, lines=lines, visible=visible)
         elif event.released:
             self._finish(event, lines=lines, visible=visible, now=now)
@@ -130,6 +128,19 @@ class Pane:
             self.toast = None
 
     # ── internals ────────────────────────────────────────────────────
+
+    def _scroll(self, delta: int, *, total: int, visible: int) -> None:
+        """Move the view by `delta` lines, resuming following once it reaches the end.
+
+        The same arithmetic `scrolled` applies to a key, including its one non-obvious part:
+        landing on the last line returns to `None` rather than pinning there, so a reader who
+        wheels back to the bottom starts following new output again instead of freezing one line
+        short of it and concluding the command had stopped.
+        """
+        bottom = max(0, total - visible)
+        settled = max(0, min(clamp(self.offset, total, visible) + delta, bottom))
+        self.offset = None if settled >= bottom else settled
+        self.following = self.offset is None
 
     def _begin(self, event: Mouse, *, lines: list[str], visible: int) -> None:
         """Pin the view and anchor a selection where the button went down.
@@ -199,7 +210,7 @@ def pending(screen: Any) -> list[Event]:
         if key == NOTHING:
             break
         if key == curses.KEY_MOUSE:
-            report = _mouse(screen)
+            report = mouse_report(screen)
             if report is not None:
                 events.append(report)
             continue
@@ -303,25 +314,6 @@ def _poll(screen: Any) -> int:
         return int(screen.getch())
     except KeyboardInterrupt:
         return INTERRUPT
-
-
-def _mouse(screen: Any) -> Mouse | None:
-    """Fetch the report `KEY_MOUSE` announced, or `None` if it cannot be read.
-
-    `getmouse` raises on a terminal that reported a mouse event it then cannot describe, which
-    is rare and entirely uninteresting — the event is dropped rather than allowed to take the
-    menu down with it.
-
-    Asked of the window first and the module second because curses puts it on the module, where
-    nothing can stand in for it. A window that offers its own is a stand-in, and that is the
-    only way this is testable without a terminal.
-    """
-    getmouse = getattr(screen, "getmouse", None) or curses.getmouse
-    try:
-        _, column, row, _, state = getmouse()
-    except curses.error:
-        return None
-    return Mouse(row=row, column=column, state=state)
 
 
 def _drift(row: int, visible: int) -> int:

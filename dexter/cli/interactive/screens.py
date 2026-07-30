@@ -14,9 +14,11 @@ from .rendering import (
     ENTER,
     ESC,
     REDRAW,
+    WHEEL_LINES,
     body_height,
     footer,
     header,
+    mouse_report,
     read_key,
     show_cursor,
     write,
@@ -179,19 +181,36 @@ def confirm_screen(screen: Any, shell: str) -> bool:
 
 
 def output_screen(screen: Any, title: str, text: str) -> None:
-    """Show a finished command's output, scrollable, until a key dismisses it."""
+    """Show a finished command's output, scrollable, until a key dismisses it.
+
+    **A mouse report never dismisses this**, and that is the whole reason it is handled here at
+    all. `getch` reports a wheel tick as `KEY_MOUSE`, one more key code that is not an arrow — so
+    the obvious "any other key returns" sent a reader who reached for the wheel straight back to
+    the menu, taking the output they were trying to read with it. Scrolling is the one gesture
+    guaranteed not to mean "I am finished".
+    """
     lines = _lines(text)
     visible = body_height(screen)
     offset = 0
 
     while True:
         _paint(screen, title, lines, offset, visible)
-        footer(screen, "↑↓ scroll   any other key returns")
+        footer(screen, "↑↓ or wheel scroll   any other key returns")
         screen.refresh()
 
         key = read_key(screen)
         if key == REDRAW:
             continue
+
+        if key == curses.KEY_MOUSE:
+            # Fetched whether or not it turns out to be a wheel: the report has to be taken
+            # before the next `getch` or it is left in the queue to be decoded as stray keys.
+            # Nothing is dragged here, so `dragging` is settled — this screen has no selection.
+            report = mouse_report(screen)
+            turn = 0 if report is None else report.wheel(dragging=False)
+            offset = clamp(offset + turn * WHEEL_LINES, len(lines), visible)
+            continue
+
         if key not in SCROLL_KEYS:
             return
         # `None` means "the end" — resolved to a line here rather than left as a sentinel,
