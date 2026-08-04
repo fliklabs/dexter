@@ -169,6 +169,78 @@ from dexter.dependency_injection import (
     UnresolvableParameterError,
     UnresolvedAnnotationError,
 )
+from dexter.iam import (
+    DIGITS,
+    HMAC_ALGORITHMS,
+    Claim,
+    Clock,
+    DuplicateAuthenticationRuleError,
+    ExpiredTokenError,
+    IamError,
+    IamNotWiredError,
+    IamRegistrationError,
+    InMemoryMagicCodeStore,
+    InvalidTokenError,
+    JwtCodec,
+    MagicCode,
+    MagicCodeError,
+    MagicCodeExpiredError,
+    MagicCodeMismatchError,
+    MagicCodePolicy,
+    MagicCodeService,
+    MagicCodeStore,
+    MagicCodeThrottledError,
+    NoMagicCodeError,
+    NotAuthenticatedError,
+    Principal,
+    SystemClock,
+    TokenError,
+    TokenKind,
+    TokenPair,
+    TokenPolicy,
+    TokenService,
+    TooManyAttemptsError,
+    WrongTokenKindError,
+    describe_token_kind,
+    register_magic_code_policy,
+    register_token_policy,
+    use_iam,
+    use_in_memory_magic_codes,
+)
+from dexter.iam.api import (
+    HEADER,
+    SCHEME,
+    STATE_KEY,
+    UNAUTHORIZED,
+    Authentication,
+    AuthenticationMiddleware,
+    AuthenticationRegistry,
+    AuthenticationRequirement,
+    current_authentication,
+    current_principal,
+    describe_requirement,
+    require_authentication,
+    use_authentication,
+)
+from dexter.notification import (
+    DeliveryError,
+    Email,
+    EmailBody,
+    EmailBodyType,
+    EmailNotifier,
+    NotificationError,
+    RecordingEmailNotifier,
+    describe_body_type,
+    use_recording_notification,
+)
+from dexter.notification.resend import (
+    ENDPOINT,
+    RESEND_FIELD,
+    ResendConfig,
+    ResendEmailNotifier,
+    register_resend_config,
+    use_resend_notification,
+)
 from dexter.tools.pins import (
     Change,
     declared,
@@ -548,3 +620,138 @@ class TestApplicationSurface:
         }
         assert all(issubclass(error, ApplicationError) for error in errors)
         assert issubclass(ApplicationError, DexterError)
+
+
+class TestIamSurface:
+    def test_the_caller_and_token_types_are_exported(self) -> None:
+        assert {Principal, Claim, TokenPair, TokenKind, MagicCode}
+
+    def test_the_policies_are_exported(self) -> None:
+        # Bound by the application with `register_*`, never passed to a `use_*`: a topology
+        # switch is not a settings object.
+        assert {TokenPolicy, MagicCodePolicy}
+
+    def test_the_services_are_exported(self) -> None:
+        assert {TokenService, MagicCodeService, JwtCodec}
+
+    def test_the_seams_and_their_shipped_implementations_are_exported(self) -> None:
+        assert {Clock, MagicCodeStore}
+        assert {SystemClock, InMemoryMagicCodeStore}
+
+    def test_the_wiring_entry_points_are_exported(self) -> None:
+        assert {
+            use_iam,
+            use_in_memory_magic_codes,
+            register_token_policy,
+            register_magic_code_policy,
+        }
+
+    def test_the_algorithm_whitelist_names_only_the_symmetric_family(self) -> None:
+        # `none` is the classic JWT forgery and must never be reachable from configuration.
+        assert {"HS256", "HS384", "HS512"} == HMAC_ALGORITHMS
+        assert DIGITS == "0123456789"
+
+    def test_every_error_is_exported(self) -> None:
+        errors = {
+            IamError,
+            IamNotWiredError,
+            IamRegistrationError,
+            DuplicateAuthenticationRuleError,
+            TokenError,
+            InvalidTokenError,
+            ExpiredTokenError,
+            WrongTokenKindError,
+            NotAuthenticatedError,
+            MagicCodeError,
+            MagicCodeExpiredError,
+            MagicCodeMismatchError,
+            MagicCodeThrottledError,
+            NoMagicCodeError,
+            TooManyAttemptsError,
+        }
+        assert all(issubclass(error, IamError) for error in errors)
+        assert issubclass(IamError, DexterError)
+
+    def test_the_token_kinds_follow_the_enum_convention(self) -> None:
+        assert all(kind.value == kind.name for kind in TokenKind)
+        assert describe_token_kind(TokenKind.ACCESS) == "TokenKind.ACCESS"
+
+    def test_the_middleware_lives_in_the_api_adapter(self) -> None:
+        """Deliberately not re-exported from `dexter.iam`, which names no transport."""
+        assert not hasattr(dexter.iam, "AuthenticationMiddleware")
+        assert AuthenticationMiddleware.__module__.startswith("dexter.iam.api")
+
+    def test_the_adapter_exports_its_own_surface(self) -> None:
+        assert {Authentication, AuthenticationRegistry, AuthenticationRequirement}
+        assert {use_authentication, require_authentication}
+        assert {current_authentication, current_principal}
+        assert {HEADER, SCHEME, STATE_KEY, UNAUTHORIZED}
+
+    def test_the_requirements_follow_the_enum_convention(self) -> None:
+        assert all(rule.value == rule.name for rule in AuthenticationRequirement)
+        assert (
+            describe_requirement(AuthenticationRequirement.ANONYMOUS)
+            == "AuthenticationRequirement.ANONYMOUS"
+        )
+
+    def test_importing_the_core_does_not_import_the_api_module(self) -> None:
+        """A worker minting tokens for a queue pulls in no routing."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, dexter.iam; print('dexter.api' in sys.modules)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "False", (
+            "importing dexter.iam pulled in dexter.api; the seam has been broken"
+        )
+
+
+class TestNotificationSurface:
+    def test_the_message_types_are_exported(self) -> None:
+        assert {Email, EmailBody, EmailBodyType, EmailNotifier}
+
+    def test_the_shipped_double_and_its_topology_are_exported(self) -> None:
+        assert {RecordingEmailNotifier, use_recording_notification}
+
+    def test_every_error_is_exported(self) -> None:
+        # No registration tree: this module owns no registry, so nothing about wiring it can
+        # be got wrong that the container does not already refuse.
+        errors = {NotificationError, DeliveryError}
+        assert all(issubclass(error, NotificationError) for error in errors)
+        assert issubclass(NotificationError, DexterError)
+
+    def test_the_body_types_follow_the_enum_convention(self) -> None:
+        assert all(kind.value == kind.name for kind in EmailBodyType)
+        assert describe_body_type(EmailBodyType.TEXT) == "EmailBodyType.TEXT"
+
+    def test_there_is_no_bare_use_notification(self) -> None:
+        """One `use_*` per engine. A topology switch that registered nothing would be scenery."""
+        assert not hasattr(dexter.notification, "use_notification")
+
+    def test_the_engine_lives_in_its_own_package(self) -> None:
+        assert not hasattr(dexter.notification, "ResendEmailNotifier")
+        assert ResendEmailNotifier.__module__.startswith("dexter.notification.resend")
+        assert {ResendConfig, use_resend_notification, register_resend_config}
+        assert ENDPOINT == "/emails"
+        assert set(RESEND_FIELD) == set(EmailBodyType)
+
+    def test_importing_the_core_does_not_import_an_http_client(self) -> None:
+        """What makes `httpx` an optional extra rather than a dependency."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, dexter.notification; print('httpx' in sys.modules)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "False", (
+            "importing dexter.notification pulled in httpx; the seam has been broken"
+        )

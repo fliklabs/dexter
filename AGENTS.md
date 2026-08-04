@@ -19,6 +19,8 @@ framework. Read source files directly — there is no external documentation.
 | `dexter.cqrs` | Implemented | Commands, queries, events and their buses |
 | `dexter.cli` | Implemented | A keyboard-navigable CLI. Ships no commands — consumers register their own |
 | `dexter.api` | Implemented | Typed request handlers, exposed over HTTP. `dexter.api.http` is the only part that knows a web framework exists |
+| `dexter.iam` | Implemented | Who is calling: magic codes in, signed tokens out. `dexter.iam.api` is the only part that knows `dexter.api` exists. No authorization |
+| `dexter.notification` | Implemented | Sending messages without naming who sends them. `dexter.notification.resend` is the only part that speaks HTTP |
 | `dexter.application` | Implemented | Composing an application from modules. The only module that depends on two others, which is its job |
 | `dexter.tools` | Implemented | Development-time tooling that ships. **Not framework** — see `dexter/tools/AGENTS.md` for why it is allowed to be here |
 | `dexter.caching` | Planned | Cache abstractions |
@@ -236,9 +238,9 @@ Traps when introspecting constructors, every one of them verified:
 `pytest` with `pytest-asyncio` in auto mode for tests. Configuration lives entirely in
 `pyproject.toml`.
 
-**Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi`.** Every
+**Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi`, `pyjwt`.** Every
 one was a deliberate decision, because consumers inherit everything declared here — and a
-module they never import still lands in their install. Adding a fifth is the same decision
+module they never import still lands in their install. Adding a sixth is the same decision
 again, not a convenience.
 
 | Dependency | Why | Floor is hard because |
@@ -247,6 +249,17 @@ again, not a convenience.
 | `click` | `dexter.cli`'s command tree, parsing and help | Nothing older is typed well enough for strict mode |
 | `rich` | `dexter.cli`'s output | — |
 | `fastapi` | `dexter.api`'s routing, validation and schema generation | Pydantic models as query parameters arrived in 0.115.0, and a route whose path names no parameter binds its whole request model that way |
+| `pyjwt` | `dexter.iam`'s signing and verification | `py.typed` arrived in 2.0, and without it `jwt_codec.py` cannot be checked under strict mode |
+
+**Optional extras: `dexter[resend]` brings `httpx`.** The extras table is the *other* answer to
+the same question, and it is preferred wherever the packaging can express it: a dependency only
+one engine of one module needs does not belong in every consumer's install. `fastapi` is not
+behind one only because `dexter.api.http` predates the pattern and moving it now would break
+every existing import.
+
+| Extra | Brings | For |
+| --- | --- | --- |
+| `resend` | `httpx` | `dexter.notification.resend`, and nothing else imports it |
 
 The declared floors themselves live in `pyproject.toml` and are not repeated here: `./upgrade.sh`
 raises them, and a number written in two places is a number that will eventually disagree. What
@@ -256,7 +269,9 @@ this table records is *why* each dependency is present and what the original har
 `fastapi` is the one that costs a consumer something they may not want: it brings `starlette`,
 `anyio`, `sniffio` and three smaller packages into an install that only wanted the container.
 That is why `dexter/api/__init__.py` imports none of it and `dexter.api.http` is a package of
-its own — the cost is real, and the boundary is where it is paid.
+its own — the cost is real, and the boundary is where it is paid. `dexter.iam` draws the same
+line twice: `jwt` reaches no further than `jwt_codec.py`, and `dexter.api` no further than
+`dexter/iam/api/`, so a worker minting tokens for a queue pulls in no routing.
 
 `curses` costs nothing: it is stdlib. It is also POSIX-only, which is why `dexter.cli` imports
 it lazily and works non-interactively everywhere.

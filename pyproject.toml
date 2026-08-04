@@ -12,17 +12,28 @@ license-files = ["LICENSE"]
 dynamic = ["version"]
 # `pydantic>=2.12` is a hard floor, not a preference: earlier releases have no cp314
 # `pydantic-core` wheel and their sdist build fails on Python 3.14. `click` and `rich` are
-# here for `dexter.cli`, and `fastapi` for `dexter.api`; each was a deliberate decision —
-# see AGENTS.md. `fastapi>=0.115` is a hard floor too: pydantic models as query parameters
-# (`Annotated[Model, Query()]`) arrived in 0.115.0, and `dexter.api` binds a whole request
-# model from the query string with them.
+# here for `dexter.cli`, `fastapi` for `dexter.api`, and `pyjwt` for `dexter.iam`; each was a
+# deliberate decision — see AGENTS.md. `fastapi>=0.115` is a hard floor too: pydantic models
+# as query parameters (`Annotated[Model, Query()]`) arrived in 0.115.0, and `dexter.api` binds
+# a whole request model from the query string with them. `pyjwt>=2.10` is a hard floor as
+# well: it is the release that added `py.typed`, without which `dexter.iam.jwt_codec` cannot
+# be checked under mypy strict.
 dependencies = [
     "click>=8.4.2",
     "fastapi>=0.141.0",
     "pydantic>=2.13.4",
+    "pyjwt>=2.10.1",
     "rich>=15.0.0",
 ]
 classifiers = ["Typing :: Typed"]
+
+# `dexter.notification` is provider-agnostic and needs nothing; only the Resend engine under
+# `dexter/notification/resend/` speaks HTTP. It is an extra rather than a dependency because a
+# consumer who never sends mail should not inherit an HTTP client — the same argument that put
+# `fastapi` behind the `dexter.api.http` boundary, taken one step further now that the
+# packaging can express it.
+[project.optional-dependencies]
+resend = ["httpx>=0.28.1"]
 
 # `requires-python` above is the public compatibility floor and the ONLY hand-edited
 # Python version literal in this repo. Ruff infers `target-version` from it and mypy
@@ -141,7 +152,11 @@ convention = "google"
 known-first-party = ["dexter"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "D", "PLR2004", "ARG"]
+# `S105`/`S106` flag a string literal assigned to anything called `secret`, `token` or
+# `password`. In `tests/` that is unavoidable and harmless: `dexter.iam` takes its signing key
+# as an ordinary argument, so every test that builds a `TokenPolicy` writes one. The rule stays
+# on everywhere else, which is where a literal credential would actually matter.
+"tests/**/*.py" = ["S101", "S105", "S106", "D", "PLR2004", "ARG"]
 # The one place inside `dexter/` that writes to a terminal, because it is a command-line tool
 # rather than framework — `python -m dexter.tools.pins` is its interface. Treat this line as a
 # boundary marker: if any *other* module under `dexter/` ever needs T20, it is printing from

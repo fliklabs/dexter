@@ -23,6 +23,8 @@ drives an event loop on your behalf.
 | `dexter.cqrs` | Implemented — commands, queries, events, buses, middleware |
 | `dexter.cli` | Implemented — a keyboard-navigable CLI you register commands into |
 | `dexter.api` | Implemented — typed request handlers, served over HTTP |
+| `dexter.iam` | Implemented — magic-code login, JWT access and refresh tokens, per-route authentication |
+| `dexter.notification` | Implemented — sending email through a contract, with a Resend engine |
 | `dexter.application` | Implemented — composing a service from modules |
 
 ## Install
@@ -31,11 +33,19 @@ drives an event loop on your behalf.
 uv add "dexter @ git+https://github.com/fliklabs/dexter"
 ```
 
-Runtime dependencies: `pydantic>=2.12`, `click>=8.3`, `rich>=14` and `fastapi>=0.115`. Two
-floors are hard: earlier pydantic has no cp314 wheel and fails to build on Python 3.14, and
-pydantic models as query parameters arrived in fastapi 0.115. `click` and `rich` are what
-`dexter.cli` is built from and `fastapi` is what `dexter.api.http` is built from; modules are
-imported directly, so a consumer who never touches either never imports them.
+Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi` and `pyjwt`. Three floors are hard:
+earlier pydantic has no cp314 wheel and fails to build on Python 3.14, pydantic models as query
+parameters arrived in fastapi 0.115, and pyjwt gained `py.typed` in 2.0. `click` and `rich` are
+what `dexter.cli` is built from, `fastapi` what `dexter.api.http` is built from, and `pyjwt`
+what `dexter.iam` signs with; modules are imported directly, so a consumer who never touches one
+never imports it.
+
+Sending email through Resend needs an HTTP client, which is an **extra** rather than something
+every consumer inherits:
+
+```bash
+uv add "dexter[resend] @ git+https://github.com/fliklabs/dexter"
+```
 
 Note that importing a framework module costs roughly 45 ms, because pydantic's schema
 machinery loads when the first model is defined. `import dexter` on its own stays free.
@@ -461,6 +471,163 @@ six lines above are.
 The reference service behind a socket: path, query and body binding, mapped failures as problem
 details, and a container scope per request. The same container the worker builds. See
 [examples/README.md](./examples/README.md).
+
+## IAM
+
+Who is calling. **Not** whether they are allowed to — there is no authorization here, no user
+table, and no opinion about who may log in.
+
+Two exchanges. A code goes to an address and comes back once:
+
+```python
+from dexter.iam import MagicCodeService, Principal, TokenService
+
+code = await codes.issue(email)  # returned once; the store keeps only a digest
+await notifier.send(Email(..., body=EmailBody.text(f"Your code is {code}.")))
+...
+await codes.verify(email, presented)  # raises, or consumes the code
+pair = tokens.mint(Principal.of(email))  # access + refresh, with both expiry instants
+```
+
+and a token is read on the way back in:
+
+```python
+principal = tokens.verify_access(bearer)  # raises, or says who
+```
+
+Wiring is the usual two shapes — what the module provides, then what the application
+contributes. The signing key is the application's, so it arrives through a `register_*`:
+
+```python
+from datetime import timedelta
+
+from dexter.iam import (
+    MagicCodePolicy,
+    TokenPolicy,
+    register_magic_code_policy,
+    register_token_policy,
+    use_iam,
+    use_in_memory_magic_codes,
+)
+from dexter.iam.api import require_authentication, use_authentication
+
+use_api(builder)  # or use_application(builder)
+use_iam(builder)
+use_in_memory_magic_codes(builder)
+register_token_policy(
+    builder,
+    TokenPolicy(
+        secret=settings.jwt_secret,  # 32 bytes or more; the model insists
+        issuer="plum",
+        access_ttl=timedelta(minutes=15),
+        refresh_ttl=timedelta(days=30),
+    ),
+)
+register_magic_code_policy(builder, MagicCodePolicy(secret=settings.jwt_secret))
+use_authentication(builder)  # registers the middleware first, and maps its 401s
+```
+
+### Which routes need a caller
+
+**Default open.** A handler nobody names is anonymous; one call closes one handler, whatever its
+exposures:
+
+```python
+register_handler(builder, PickupApi, HttpExposure(...), scope=Scope.TRANSIENT)
+require_authentication(builder, PickupApi)
+```
+
+The rule is keyed on the handler class, which is what `Invocation` carries — so a refused
+request is turned away **before** the container builds the handler or anything beneath it. A
+request nobody is allowed to make costs no database connection.
+
+`AuthenticationRegistry.requirements()` lists every rule, which is what makes the open default
+auditable: an application that wants default-deny asserts over `ExposureRegistry.records()` that
+every handler was named.
+
+### Reaching the caller
+
+Ask for one, the same way you ask for anything else:
+
+```python
+class WhoAmI:
+    def __init__(self, principal: Principal) -> None:  # 401 without a caller
+        self.principal = principal
+
+
+class Greeting:
+    def __init__(self, authentication: Authentication) -> None:  # works either way
+        self.authentication = authentication
+```
+
+Declaring a `Principal` **is** the statement that the operation needs a caller — handler
+dependencies are built inside the request's error handling, so it answers 401 rather than 500.
+`Authentication` always resolves and may name nobody. Both are `Scope.SCOPED`, so a repository
+three levels down can know who is asking without a web framework in its imports.
+
+### What it does not do
+
+Refresh is **stateless**: a refresh token is a self-contained JWT with an `exp` and nothing is
+looked up, so logging out clears the client and the token stays valid until it expires. Every
+token carries a `jti`, which is the handle a session store would key on when that changes.
+There is no authorization, no user table, no whitelist — deciding whether an address may log in
+is yours, and it belongs *before* the call to `issue`, so a rejected address costs neither a
+stored record nor a sent message.
+
+## Notification
+
+One contract, and one line of wiring choosing who honours it:
+
+```python
+from dexter.notification import Email, EmailBody, EmailNotifier
+
+
+class SendMagicCode:
+    def __init__(self, notifier: EmailNotifier) -> None:  # names no provider
+        self.notifier = notifier
+
+    async def send(self, to: str, code: str) -> None:
+        await self.notifier.send(
+            Email(
+                from_address="Plum <noreply@example.com>",
+                to_addresses=(to,),
+                subject="Your code",
+                body=EmailBody.text(f"Your code is {code}."),
+            )
+        )
+```
+
+```python
+# Records, sends nothing. Tests and local development.
+use_recording_notification(builder)
+```
+
+```python
+from dexter.notification.resend import (
+    ResendConfig,
+    register_resend_config,
+    use_resend_notification,
+)
+
+use_resend_notification(builder)
+register_resend_config(builder, ResendConfig(api_key=settings.resend_api_key))
+```
+
+Exactly one of those. Calling two binds `EmailNotifier` twice and the container refuses the
+second — the right failure, because the alternative is real mail sent from a test suite.
+
+`RecordingEmailNotifier` is bound under both keys, so a test resolves the concrete class and
+reads `sent` back:
+
+```python
+recorder = await container.resolve(RecordingEmailNotifier)
+assert recorder.last is not None
+assert "Your code is" in recorder.last.body.data
+```
+
+dexter renders nothing — a subject and a body arrive composed, because templating is a choice
+most consumers have already made. `httpx` is an extra, not a dependency: importing
+`dexter.notification` pulls in no HTTP client, and a test enforces that.
 
 ## Application
 
