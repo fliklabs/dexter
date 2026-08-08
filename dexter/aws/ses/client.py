@@ -1,31 +1,17 @@
-"""Sending mail through SES.
+"""Sending one message at a time.
 
-**`sesv2`, not `ses`, and the choice is worth the paragraph.** The v1 API is in maintenance:
-everything added since 2019 — configuration-set engagement metrics, the Virtual Deliverability
-Manager, list and contact management, per-send tags — exists only in v2. More immediately, v2
-folds Simple, Raw and Templated sending into one `Content` union on one `SendEmail`, so a
-text-and-HTML message and a MIME message with an attachment are the same operation; v1 needs
-three. The usual reason to stay on v1 is that migrating means changing an IAM policy, and it does
-not: the action is `ses:SendEmail` for both.
-
-What it costs is that the request shape — `Content.Simple.Body.{Text,Html}.Data` — is deeper than
-v1's and easy to get wrong, and that every search result shows v1. That is a documentation cost
-rather than a capability one, and `botocore.stub.Stubber` catches the mistake in a test.
-
-**This file names no dexter module.** Plugging SES into `dexter.notification`'s `EmailNotifier`
-contract is `dexter/notification/ses/`, beside the Resend engine and pointing the same way. A
-worker sending a receipt through this client pulls in no notification module, and nothing here
-knows one exists.
+The client is thin on purpose: `_request.py` assembles the request and holds the guards, and this
+file is the send, the failure translation, and nothing else.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from botocore.exceptions import ClientError
 
-from ._calling import call, error_code
-from .errors import EmailRejectedError
-from .session import AwsSession
+from .._calling import call, error_code
+from ..errors import EmailRejectedError
+from ..session import AwsSession
+from ._request import build
 
 REJECTION_CODES = frozenset(
     {
@@ -52,7 +38,7 @@ class SesClient:
         """Take the shared boto3 clients."""
         self._session = session
 
-    async def send_email(  # noqa: PLR0913 - a message has this many parts; see the module docstring
+    async def send_email(  # noqa: PLR0913 - a message has this many parts; see the package docstring
         self,
         *,
         sender: str,
@@ -88,41 +74,23 @@ class SesClient:
             SES's message identifier.
 
         Raises:
-            ValueError: If `to` is empty, or if neither `text` nor `html` was given. Both are
-                raised here rather than left to the service, so the traceback points at the call
-                that made the message.
+            ValueError: If `to` is empty, or if neither `text` nor `html` was given.
             EmailRejectedError: If SES refused the message on the account's configuration.
             AwsRequestError: If the send was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        if not to:
-            raise ValueError("send_email needs at least one recipient in `to`.")
-        if text is None and html is None:
-            raise ValueError("send_email needs a `text` body, an `html` body, or both.")
-
-        body: dict[str, Any] = {}
-        if text is not None:
-            body["Text"] = {"Data": text}
-        if html is not None:
-            body["Html"] = {"Data": html}
-
-        request: dict[str, Any] = {
-            "FromEmailAddress": sender,
-            "Destination": {
-                "ToAddresses": list(to),
-                "CcAddresses": list(cc),
-                "BccAddresses": list(bcc),
-            },
-            "Content": {"Simple": {"Subject": {"Data": subject}, "Body": body}},
-        }
-        if reply_to:
-            request["ReplyToAddresses"] = list(reply_to)
-        if configuration_set is not None:
-            request["ConfigurationSetName"] = configuration_set
-        if tags:
-            request["EmailTags"] = [
-                {"Name": name, "Value": value} for name, value in tags.items()
-            ]
+        request = build(
+            sender=sender,
+            to=to,
+            subject=subject,
+            text=text,
+            html=html,
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to,
+            configuration_set=configuration_set,
+            tags=tags,
+        )
 
         def send() -> str:
             try:

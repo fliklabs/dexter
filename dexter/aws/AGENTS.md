@@ -4,6 +4,10 @@ Seven AWS clients, asynchronous over a synchronous SDK, with no boto3 type on an
 
 ## Layout
 
+**Every service is a package, and each holds a `client.py` plus whatever sub-concepts it earned.**
+The uniformity is the point: a reader looking for how SQS batches, how SES assembles a request or
+how DynamoDB serialises an item finds each in a file named after it, in the same place.
+
 | Path | Holds |
 | --- | --- |
 | `session.py` | `AwsSession` — **the only file that constructs boto3**. Seven lazy clients |
@@ -14,12 +18,21 @@ Seven AWS clients, asynchronous over a synchronous SDK, with no boto3 type on an
 | `models/` | `config`, `storage`, `messaging`, `items`, `conditions` — shape, never behaviour |
 | `s3/` | `client`, `listing` (pagination), `presigning` (reaches no network) |
 | `dynamodb/` | `client`, `conditions`↔`_expressions`, `paging`, `_items` (the type policy), `_batching` |
-| `secrets.py`, `parameters.py` | The two value stores, each with a client and a `ValueSource` |
-| `ses.py`, `sns.py`, `sqs.py` | Mail, notifications, queues |
+| `secrets/`, `parameters/` | `client` and `value` — *how it is fetched* and *where one value lives* |
+| `sqs/` | `client`, `_batching` (chunking, entry ids), `_messages` (translation, guards) |
+| `ses/` | `client`, `_request` (the four-level v2 shape, and the guards on building it) |
+| `sns/` | `client`, `_envelopes` (attribute wrapping, the SMS-type table, the size limit) |
 | `use.py` | `use_aws`, `register_aws_config`, `register_secret_value`, `register_parameter_value` |
 
-`tests/aws/test_boundaries.py` enforces the layout claims: which files may name boto3, that no
-exported object is a boto3 type, and that nothing here imports another dexter module.
+Nothing but `client.py` is re-exported from a service package unless a consumer names it —
+`SecretValue` and `ParameterValue` are, because a deployment binds them; `_batching`,
+`_messages`, `_request` and `_envelopes` carry a leading underscore because nobody outside their
+package should.
+
+`tests/aws/test_boundaries.py` enforces the layout claims: which files may name boto3 — by path,
+now that five files are called `client.py`, and checked in both directions so a stale allowance
+fails — that no exported object is a boto3 type, and that nothing here imports another dexter
+module.
 
 ## Decisions that are not obvious from the code
 

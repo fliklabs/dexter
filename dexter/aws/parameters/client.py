@@ -1,21 +1,15 @@
-"""Reading configuration out of the parameter store.
-
-The sibling of `secrets.py`, and the split between them is a deployment convention worth stating:
-a **secret** is one JSON document holding many values under one name, and a **parameter** is one
-value under one name in a hierarchy. Table names, queue URLs, endpoints and feature flags are
-parameters; passwords and API keys are secret keys. Both arrive at a component as a `ValueSource`
-and neither is visible from there, which is the point.
-
-The class is `ParameterStoreClient` rather than `SsmClient` for two reasons. Systems Manager is a
-large service and this speaks to one part of it, so the narrower name is the true one; and
-`SsmClient` would sit in `session.py` beside `mypy_boto3_ssm`'s own `SSMClient`, where
-`SecretsManagerClient` already collides with its stub counterpart once.
+"""Reading parameters, one at a time, ten at a time, or a whole hierarchy.
 
 **Decryption is on by default**, and that is the one behaviour here worth arguing for. Without
 `WithDecryption`, reading a `SecureString` succeeds and returns the *ciphertext* — a plausible
 looking string that becomes a wrong configuration value somewhere far away. The cost of leaving
 it on is a `kms:Decrypt` the caller almost always wants; the failure when the role lacks it is a
 loud `AccessDeniedError` naming the call, which is the better of the two ways to be wrong.
+
+The class is `ParameterStoreClient` rather than `SsmClient` for two reasons. Systems Manager is a
+large service and this speaks to one part of it, so the narrower name is the true one; and
+`SsmClient` would sit in `session.py` beside `mypy_boto3_ssm`'s own `SSMClient`, where
+`SecretsManagerClient` already collides with its stub counterpart once.
 """
 
 from collections.abc import AsyncIterator, Sequence
@@ -23,10 +17,10 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-from ._caching import TtlCache
-from ._calling import call, error_code
-from .errors import ParameterNotFoundError
-from .session import AwsSession
+from .._caching import TtlCache
+from .._calling import call, error_code
+from ..errors import ParameterNotFoundError
+from ..session import AwsSession
 
 MISSING_PARAMETER_CODE = "ParameterNotFound"
 """What `GetParameter` says when the name is not in the store.
@@ -225,42 +219,3 @@ def _cache_key(name: str, decrypt: bool, /) -> str:
     single key would let an undecrypted read poison what every decrypted one sees.
     """
     return f"{name}\x00{decrypt:d}"
-
-
-class ParameterValue:
-    """A `ValueSource` over one parameter.
-
-    What a deployment binds in place of a `StaticValue` for a table name, a queue URL or an
-    endpoint. It holds a location and no value; `ParameterStoreClient` holds the cache, once, for
-    every value naming the same parameter.
-    """
-
-    __slots__ = ("_client", "_decrypt", "_name")
-
-    def __init__(
-        self, client: ParameterStoreClient, name: str, *, decrypt: bool = True
-    ) -> None:
-        """Name where the value lives.
-
-        Args:
-            client: The fetcher, and so the cache.
-            name: The parameter's full name, such as `/app/production/orders-table`.
-            decrypt: Whether to ask the service to decrypt a `SecureString`.
-        """
-        self._client = client
-        self._name = name
-        self._decrypt = decrypt
-
-    async def value(self) -> str:
-        """Fetch the value, usually from cache.
-
-        Raises:
-            ParameterNotFoundError: If the parameter does not exist.
-            AwsRequestError: If the fetch was refused or could not be made.
-            CredentialsUnavailableError: If this process has no usable identity.
-        """
-        return await self._client.get_parameter(self._name, decrypt=self._decrypt)
-
-    def __repr__(self) -> str:
-        """Name where the value comes from, which is a location rather than a secret."""
-        return f"{type(self).__name__}({self._name!r})"

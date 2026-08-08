@@ -26,17 +26,24 @@ SDK = {"boto3", "botocore"}
 ALLOWED_SDK_FILES = {
     "session.py",  # builds every client
     "_calling.py",  # translates every failure
-    "_items.py",  # the serializer, and `Binary`
-    "_expressions.py",  # the condition builder
-    "client.py",  # each client catches the codes only it can interpret
-    "parameters.py",
-    "secrets.py",
-    "ses.py",
+    "dynamodb/_items.py",  # the serializer, and `Binary`
+    "dynamodb/_expressions.py",  # the condition builder
+    # Each of these catches `ClientError` to recognise the codes only it can interpret — a
+    # missing object, a missing parameter, a refused message, a lost condition — before the
+    # shared translation in `_calling.py` sees them.
+    #
+    # `secrets/client.py` is deliberately absent: a missing key is something it reads out of a
+    # successful response body, not a code it has to catch, so it needs no SDK import at all.
+    "dynamodb/client.py",
+    "parameters/client.py",
+    "s3/client.py",
+    "ses/client.py",
 }
 """Files that may name the SDK, and why each one has to.
 
-A whitelist rather than a rule, because the reason differs per file and a rule that covered all
-of them would be too loose to catch a tenth. Adding a name here should take an argument.
+**Paths relative to the package, not basenames.** Five files are now called `client.py`, so a
+basename whitelist would let any of them import boto3 for any reason — and the whole point is
+that each entry here is a specific argument about a specific file.
 """
 
 
@@ -81,12 +88,29 @@ class TestTheSdkBoundary:
 
     @pytest.mark.parametrize("source", modules(), ids=lambda path: path.name)
     def test_only_the_named_files_import_the_sdk(self, source: Path) -> None:
-        if source.name in ALLOWED_SDK_FILES:
+        relative = source.relative_to(PACKAGE).as_posix()
+        if relative in ALLOWED_SDK_FILES:
             return
         offending = distributions(source) & SDK
         assert not offending, (
-            f"{source.name} imports {offending}. Either it belongs in ALLOWED_SDK_FILES with a "
+            f"{relative} imports {offending}. Either it belongs in ALLOWED_SDK_FILES with a "
             f"reason, or the SDK has escaped the boundary."
+        )
+
+    def test_every_allowed_file_exists(self) -> None:
+        """A whitelist entry for a file that has been renamed is an allowance nobody revoked."""
+        missing = {name for name in ALLOWED_SDK_FILES if not (PACKAGE / name).exists()}
+        assert not missing, f"ALLOWED_SDK_FILES names files that are gone: {missing}"
+
+    def test_every_allowed_file_really_does_import_the_sdk(self) -> None:
+        """And an entry for a file that no longer needs it is the same problem inverted."""
+        idle = {
+            name
+            for name in ALLOWED_SDK_FILES
+            if (PACKAGE / name).exists() and not distributions(PACKAGE / name) & SDK
+        }
+        assert not idle, (
+            f"ALLOWED_SDK_FILES names files that do not import boto3: {idle}"
         )
 
     def test_the_session_really_does_import_it(self) -> None:

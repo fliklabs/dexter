@@ -1,26 +1,19 @@
-"""Reading secrets, and the cache that makes doing so per-call affordable.
-
-A secret here is **one JSON document holding many keys** — `{"DATABASE_PASSWORD": ..., ...}`
-under a name like `app/production/secrets` — rather than one secret per value. That is a
-deployment convention rather than a rule of the service, and it is the one this supports directly
-because it is what makes provisioning a new key an edit rather than another infrastructure
-resource. It is also why one fetch serves every value a process needs: ten `SecretValue`s over
-one secret cost one request between them.
+"""Fetching JSON secrets, and the cache that makes doing so per-call affordable.
 
 **The cache is most of why this class exists.** A value resolved from a secret store is read on
 every call that needs it, so an uncached implementation turns each request into two network
-round-trips and each secret into a per-request charge. `TtlCache` in `_caching.py` holds the
-policy, including the part that matters under load — one fetch at a time per secret, however
-many callers arrive together.
+round-trips and each secret into a per-request charge. `TtlCache` holds the policy, including the
+part that matters under load — one fetch at a time per secret, however many callers arrive
+together.
 """
 
 import json
 from typing import Any
 
-from ._caching import TtlCache
-from ._calling import call
-from .errors import SecretNotFoundError
-from .session import AwsSession
+from .._caching import TtlCache
+from .._calling import call
+from ..errors import SecretNotFoundError
+from ..session import AwsSession
 
 
 class SecretsManagerClient:
@@ -108,48 +101,3 @@ class SecretsManagerClient:
                 f"object of named values."
             )
         return document
-
-
-class SecretValue:
-    """A `ValueSource` over one key of one JSON secret.
-
-    This is what a deployment binds in place of a `StaticValue`, and the substitution is the
-    whole design: a component holds one of these and never learns which of the two it has, so the
-    same code runs against a developer's settings file and a production secret store.
-
-    It holds no value of its own and does no caching — `SecretsManagerClient` does both, once,
-    for every value pointing at the same secret.
-    """
-
-    __slots__ = ("_client", "_key", "_secret_id")
-
-    def __init__(self, client: SecretsManagerClient, secret_id: str, key: str) -> None:
-        """Name where the value lives.
-
-        Args:
-            client: The fetcher, and so the cache.
-            secret_id: The secret's name, such as `app/production/secrets`.
-            key: The name inside it, such as `DATABASE_PASSWORD`.
-        """
-        self._client = client
-        self._secret_id = secret_id
-        self._key = key
-
-    async def value(self) -> str:
-        """Fetch the value, usually from cache.
-
-        Raises:
-            SecretNotFoundError: If the secret or the key is missing.
-            AwsRequestError: If the fetch was refused or could not be made.
-            CredentialsUnavailableError: If this process has no usable identity.
-        """
-        return await self._client.get_secret_key(self._secret_id, self._key)
-
-    def __repr__(self) -> str:
-        """Name where the value comes from, which is not itself a secret.
-
-        The rule this and `StaticValue` split between them: an implementation holding the value
-        discloses nothing, and one holding only a location names it. A secret's name and a key's
-        name are locations, and printing them is what makes a misconfiguration readable in a log.
-        """
-        return f"{type(self).__name__}({self._secret_id!r}, {self._key!r})"
