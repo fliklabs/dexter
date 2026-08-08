@@ -29,14 +29,20 @@ ALLOWED_SDK_FILES = {
     "dynamodb/_items.py",  # the serializer, and `Binary`
     "dynamodb/_expressions.py",  # the condition builder
     # Each of these catches `ClientError` to recognise the codes only it can interpret — a
-    # missing object, a missing parameter, a refused message, a lost condition — before the
-    # shared translation in `_calling.py` sees them.
+    # missing object, a missing parameter, a refused message, a lost condition, a cancelled
+    # transaction — before the shared translation in `_calling.py` sees them.
     #
-    # `secrets/client.py` is deliberately absent: a missing key is something it reads out of a
-    # successful response body, not a code it has to catch, so it needs no SDK import at all.
-    "dynamodb/client.py",
+    # **`dynamodb/client.py` and `secrets/client.py` are deliberately absent.** DynamoDB's
+    # recognising moved wholesale into `_failures.py` and `transactions.py`, so the client is
+    # now pure operations; and a missing secret key is something read out of a *successful*
+    # response body rather than a code to catch. Two of the seven clients touch no SDK at all,
+    # which is the boundary working rather than an accident.
+    "dynamodb/_failures.py",
+    "dynamodb/transactions.py",
     "parameters/client.py",
+    "s3/_failures.py",
     "s3/client.py",
+    "s3/copying.py",
     "ses/client.py",
 }
 """Files that may name the SDK, and why each one has to.
@@ -73,6 +79,16 @@ def modules() -> list[Path]:
     return sorted(PACKAGE.rglob("*.py"))
 
 
+def named(source: Path) -> str:
+    """A file's path relative to the package, which is what identifies it here.
+
+    Used for the parametrised test ids as well as the whitelist: several files are called
+    `client.py` and two are called `_failures.py`, so a basename would produce ids like
+    `_failures.py0` that name nothing a reader can act on.
+    """
+    return source.relative_to(PACKAGE).as_posix()
+
+
 def exported() -> list[Any]:
     """Every name `dexter.aws` re-exports."""
     return [
@@ -86,9 +102,9 @@ class TestTheSdkBoundary:
     def test_the_package_has_modules_to_check(self) -> None:
         assert modules()
 
-    @pytest.mark.parametrize("source", modules(), ids=lambda path: path.name)
+    @pytest.mark.parametrize("source", modules(), ids=named)
     def test_only_the_named_files_import_the_sdk(self, source: Path) -> None:
-        relative = source.relative_to(PACKAGE).as_posix()
+        relative = named(source)
         if relative in ALLOWED_SDK_FILES:
             return
         offending = distributions(source) & SDK
@@ -117,7 +133,7 @@ class TestTheSdkBoundary:
         """The negative check alone would pass if the module were simply broken."""
         assert distributions(PACKAGE / "session.py") & SDK
 
-    @pytest.mark.parametrize("source", modules(), ids=lambda path: path.name)
+    @pytest.mark.parametrize("source", modules(), ids=named)
     def test_nothing_imports_another_dexter_module(self, source: Path) -> None:
         """`dexter.aws` is a peer of the other modules, never a consumer of one.
 

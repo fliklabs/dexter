@@ -21,6 +21,12 @@ import secrets
 from collections.abc import Sequence
 from typing import Any
 
+from .._calling import call
+from ..errors import BatchIncompleteError
+from ..models import Item
+from ..session import AwsSession
+from ._items import deserialise
+
 BASE_BACKOFF_SECONDS = 0.05
 """How long to wait before the first retry, doubling each round."""
 
@@ -56,3 +62,81 @@ def count_unprocessed(unprocessed: dict[str, Any], /) -> int:
         elif isinstance(value, dict):
             total += len(value.get("Keys", []))
     return total
+
+
+WRITE_BATCH_SIZE = 25
+"""How many entries one `BatchWriteItem` may carry. A hard service limit."""
+
+READ_BATCH_SIZE = 100
+"""How many keys one `BatchGetItem` may carry. A hard service limit."""
+
+
+async def write_batch(session: AwsSession, entries: dict[str, Any], /) -> None:
+    """Send one chunk of writes, resending whatever the service declined.
+
+    Raises:
+        BatchIncompleteError: If entries were still unprocessed after the retry budget.
+    """
+    pending = entries
+    for round_number in range(session.config.max_attempts):
+        if round_number:
+            await backoff(round_number)
+        response = await _send_write(session, pending)
+        unprocessed = response.get("UnprocessedItems") or {}
+        if not unprocessed:
+            return
+        pending = unprocessed
+
+    raise BatchIncompleteError(
+        f"BatchWriteItem left {count_unprocessed(pending)} entries unprocessed after "
+        f"{session.config.max_attempts} attempts."
+    )
+
+
+async def read_batch(
+    session: AwsSession, keys: dict[str, Any], found: dict[str, list[Item]], /
+) -> None:
+    """Send one chunk of reads, resending whatever the service declined.
+
+    Collects into `found` rather than returning, because a caller reading several tables
+    accumulates across chunks and merging return values would be the same loop written twice.
+
+    Raises:
+        BatchIncompleteError: If keys were still unprocessed after the retry budget.
+    """
+    pending = keys
+    for round_number in range(session.config.max_attempts):
+        if round_number:
+            await backoff(round_number)
+        response = await _send_read(session, pending)
+        for table, items in response.get("Responses", {}).items():
+            found.setdefault(table, []).extend(deserialise(item) for item in items)
+        unprocessed = response.get("UnprocessedKeys") or {}
+        if not unprocessed:
+            return
+        pending = unprocessed
+
+    raise BatchIncompleteError(
+        f"BatchGetItem left {count_unprocessed(pending)} keys unprocessed after "
+        f"{session.config.max_attempts} attempts."
+    )
+
+
+async def _send_write(session: AwsSession, pending: dict[str, Any], /) -> Any:
+    """One `BatchWriteItem` request.
+
+    Its own function rather than a lambda built inside the retry loop, because a closure over a
+    loop variable is what ruff's B023 exists to catch.
+    """
+    return await call(
+        "BatchWriteItem",
+        lambda: session.dynamodb.batch_write_item(RequestItems=pending),
+    )
+
+
+async def _send_read(session: AwsSession, pending: dict[str, Any], /) -> Any:
+    """One `BatchGetItem` request, for the same reason."""
+    return await call(
+        "BatchGetItem",
+        lambda: session.dynamodb.batch_get_item(RequestItems=pending),
+    )

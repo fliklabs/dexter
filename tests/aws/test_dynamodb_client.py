@@ -37,7 +37,7 @@ from dexter.aws import (
     TransactPut,
     TransactUpdate,
 )
-from dexter.aws.dynamodb.client import _translate_cancellation
+from dexter.aws.dynamodb._failures import translate_cancellation
 
 TABLE = "orders"
 ITEM = {"pk": "u#1", "sk": "order#1", "total": Decimal("19.99")}
@@ -668,7 +668,7 @@ class TestCancellationReasons:
             "TransactWriteItems",
         )
         with pytest.raises(ConditionFailedError, match="entry 1"):
-            _translate_cancellation(error)
+            translate_cancellation(error)
 
     def test_a_conflict_becomes_a_retryable_error(self) -> None:
         """Two classes because one is retryable and the other never is."""
@@ -677,7 +677,7 @@ class TestCancellationReasons:
             "TransactWriteItems",
         )
         with pytest.raises(TransactionConflictError, match="entry 0"):
-            _translate_cancellation(error)
+            translate_cancellation(error)
 
     def test_reasons_naming_nothing_are_left_alone(self) -> None:
         """So the caller sees the general translation rather than a guess."""
@@ -685,7 +685,7 @@ class TestCancellationReasons:
             cancelled([{"Code": "None"}]),  # type: ignore[arg-type]
             "TransactWriteItems",
         )
-        _translate_cancellation(error)
+        translate_cancellation(error)
 
 
 class TestMoreCoverage:

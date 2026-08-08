@@ -13,7 +13,9 @@ the body, so reading only the status code says nothing about them.
 from collections.abc import Sequence
 from typing import Any
 
+from .._calling import call
 from ..models import BatchFailure, BatchSuccess, OutboundMessage
+from ..session import AwsSession
 
 BATCH_SIZE = 10
 """How many entries one batch request may carry.
@@ -94,4 +96,49 @@ def collect(
             sender_fault=bool(entry.get("SenderFault", False)),
         )
         for entry in response.get("Failed", [])
+    )
+
+
+# The three batch requests. Free functions taking the session rather than methods on the client,
+# for two reasons that point the same way: a closure over a loop variable is what ruff's B023
+# exists to catch, so each has to be somewhere other than the loop that calls it — and once it is
+# a function, chunking, entry ids, the request and reading the answer are all one file.
+
+
+async def send_batch(
+    session: AwsSession, queue_url: str, entries: list[dict[str, Any]], /
+) -> Any:
+    """Send one chunk of at most ten messages."""
+    return await call(
+        f"SendMessageBatch to {queue_url}",
+        lambda: session.sqs.send_message_batch(
+            QueueUrl=queue_url,
+            Entries=entries,  # type: ignore[arg-type]
+        ),
+    )
+
+
+async def delete_batch(
+    session: AwsSession, queue_url: str, entries: list[dict[str, Any]], /
+) -> Any:
+    """Delete one chunk of at most ten messages."""
+    return await call(
+        f"DeleteMessageBatch from {queue_url}",
+        lambda: session.sqs.delete_message_batch(
+            QueueUrl=queue_url,
+            Entries=entries,  # type: ignore[arg-type]
+        ),
+    )
+
+
+async def visibility_batch(
+    session: AwsSession, queue_url: str, entries: list[dict[str, Any]], /
+) -> Any:
+    """Change the visibility of one chunk of at most ten messages."""
+    return await call(
+        f"ChangeMessageVisibilityBatch on {queue_url}",
+        lambda: session.sqs.change_message_visibility_batch(
+            QueueUrl=queue_url,
+            Entries=entries,  # type: ignore[arg-type]
+        ),
     )

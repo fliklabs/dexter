@@ -15,24 +15,31 @@ how DynamoDB serialises an item finds each in a file named after it, in the same
 | `_caching.py` | `TtlCache` — expiry plus one in-flight fetch per key. Shared by secrets and parameters |
 | `values.py` | `ValueSource`, `StaticValue` — the provider pattern's contract and its local half |
 | `errors.py` | The tree, rooted at `AwsError`. Shaped by what a caller does next, not by which service spoke |
-| `models/` | `config`, `storage`, `messaging`, `items`, `conditions` — shape, never behaviour |
-| `s3/` | `client`, `listing` (pagination), `presigning` (reaches no network) |
-| `dynamodb/` | `client`, `conditions`↔`_expressions`, `paging`, `_items` (the type policy), `_batching` |
+| `models/` | `config`, `storage`, `messaging`, `items`, `conditions` (the tree), `attributes` (`Attr`/`Key`) — shape, never behaviour |
+| `s3/` | `client`, plus `listing`, `presigning`, `copying`, `deleting`, `tagging` and `_failures` |
+| `dynamodb/` | `client`, `transactions`, `paging`, `_requests`, `_expressions`, `_items`, `_batching`, `_failures` |
 | `secrets/`, `parameters/` | `client` and `value` — *how it is fetched* and *where one value lives* |
-| `sqs/` | `client`, `_batching` (chunking, entry ids), `_messages` (translation, guards) |
+| `sqs/` | `client`, `_batching` (chunking, entry ids, the batch requests), `_messages` (translation, guards) |
 | `ses/` | `client`, `_request` (the four-level v2 shape, and the guards on building it) |
 | `sns/` | `client`, `_envelopes` (attribute wrapping, the SMS-type table, the size limit) |
 | `use.py` | `use_aws`, `register_aws_config`, `register_secret_value`, `register_parameter_value` |
 
-Nothing but `client.py` is re-exported from a service package unless a consumer names it —
-`SecretValue` and `ParameterValue` are, because a deployment binds them; `_batching`,
-`_messages`, `_request` and `_envelopes` carry a leading underscore because nobody outside their
-package should.
+**A `client.py` is the operations and their docstrings, and nothing else.** Assembling a request,
+recognising a failure, chunking a batch and walking a page each live beside it under a name that
+says so. A leading underscore marks the ones no consumer should reach: `_requests`, `_failures`,
+`_batching`, `_messages`, `_envelopes`, `_items`, `_expressions`. The rest are named plainly
+because a caller may legitimately annotate what they return.
+
+Two `client.py` files sit a little above the ~300-line guideline (`dynamodb` at ~355, `s3` at
+~310) and that is the floor rather than a deferral: what remains in each is one signature and one
+Google-style docstring per operation, and ten documented operations cannot be fewer lines without
+either splitting one class across files or deleting the documentation. **`dynamodb/client.py` now
+imports no boto3 at all**, which is the clearest evidence the extraction went to the right depth.
 
 `tests/aws/test_boundaries.py` enforces the layout claims: which files may name boto3 — by path,
-now that five files are called `client.py`, and checked in both directions so a stale allowance
-fails — that no exported object is a boto3 type, and that nothing here imports another dexter
-module.
+now that several are called `client.py`, and checked in both directions so a stale allowance
+fails the suite — that no exported object is a boto3 type, and that nothing here imports another
+dexter module.
 
 ## Decisions that are not obvious from the code
 

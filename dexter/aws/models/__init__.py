@@ -9,8 +9,9 @@ Every name `models.py` exported before the promotion is re-exported here, so not
 `dexter.aws.models` had to change.
 """
 
+from .attributes import Attr as Attr
+from .attributes import Key as Key
 from .conditions import And as And
-from .conditions import Attr as Attr
 from .conditions import AttributeType as AttributeType
 from .conditions import BeginsWith as BeginsWith
 from .conditions import Between as Between
@@ -20,7 +21,6 @@ from .conditions import Condition as Condition
 from .conditions import Contains as Contains
 from .conditions import Exists as Exists
 from .conditions import In as In
-from .conditions import Key as Key
 from .conditions import Not as Not
 from .conditions import NotExists as NotExists
 from .conditions import Or as Or

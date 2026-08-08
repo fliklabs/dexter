@@ -1,17 +1,14 @@
-"""Reading and writing objects, and the operations that move or describe them.
+"""The operations a caller reaches for, over one bucket at a time.
 
 The bucket is an argument rather than configuration, because an application that stores two
 unrelated kinds of thing should not need two of these — and because the bucket is usually the
 part that varies per deployment while the client does not.
 
-Two decisions here are worth knowing before reading the code:
-
-- **`head_object` answers `None` and `get_object` raises.** Both are right. "Did the upload
-  happen" has absence as an ordinary answer, and `None` keeps that on the normal path; "give me
-  the bytes" was told to produce something and could not.
-- **`delete_objects` returns a report rather than nothing.** `DeleteObjects` answers HTTP 200
-  with the refused keys listed in the body, so a signature returning `None` throws away the only
-  part a caller has to act on.
+**Several methods here are three lines.** Listing, presigning, copying and batched deletion each
+have their own file, and this one is the surface a consumer reads: what can be done, what each
+answer means, and what is raised. The decision that stays here is the one that recurs —
+`head_object` answers `None` where `get_object` raises, because "did the upload happen" has
+absence as an ordinary answer and "give me the bytes" does not.
 """
 
 from collections.abc import Mapping, Sequence
@@ -19,24 +16,16 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-from .._calling import call, error_code
+from .._calling import call
 from ..errors import ObjectNotFoundError
-from ..models import DeleteFailure, DeleteReport, ObjectSummary
+from ..models import DeleteReport, ObjectSummary
 from ..session import AwsSession
+from ._failures import is_missing
+from .copying import copy_object, move_object
+from .deleting import delete_objects
 from .listing import ObjectStream
 from .presigning import presigned_get_url, presigned_put_url
-
-MISSING_OBJECT_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
-"""What S3 says when an object is not there, which is three different things.
-
-`GetObject` answers `NoSuchKey`. `HeadObject` has no body to put a code in, so botocore
-synthesises one from the status and it arrives as `404` — or as `NotFound`, depending on the
-version. Matching one of the three and letting the others through is how a missing object comes
-back as a permission error.
-"""
-
-DELETE_BATCH_SIZE = 1000
-"""How many keys one `DeleteObjects` may carry. A hard service limit, not a choice."""
+from .tagging import get_object_tags, put_object_tags
 
 
 class S3Client:
@@ -114,7 +103,7 @@ class S3Client:
             try:
                 response = self._session.s3.get_object(Bucket=bucket, Key=key)
             except ClientError as error:
-                if error_code(error) in MISSING_OBJECT_CODES:
+                if is_missing(error):
                     raise ObjectNotFoundError(
                         f"s3://{bucket}/{key} does not exist."
                     ) from error
@@ -144,7 +133,7 @@ class S3Client:
             try:
                 response = self._session.s3.head_object(Bucket=bucket, Key=key)
             except ClientError as error:
-                if error_code(error) in MISSING_OBJECT_CODES:
+                if is_missing(error):
                     return None
                 raise
             return ObjectSummary(
@@ -179,30 +168,13 @@ class S3Client:
         Returns:
             Which keys were removed and which were refused. **Check `failed`** — the request
             succeeds even when individual keys do not, so a caller who reads only the absence of
-            an exception has been told nothing about them.
+            an exception has been told nothing about them. See `dexter.aws.s3.deleting`.
 
         Raises:
             AwsRequestError: If a request was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        deleted: list[str] = []
-        failed: list[DeleteFailure] = []
-        for start in range(0, len(keys), DELETE_BATCH_SIZE):
-            chunk = keys[start : start + DELETE_BATCH_SIZE]
-            # Chunks go one after another rather than through a `gather`. Forty concurrent
-            # chunks would be forty threads against an executor that holds about thirty-two,
-            # which is a self-inflicted stall rather than parallelism.
-            response = await self._delete_chunk(bucket, chunk)
-            deleted.extend(entry["Key"] for entry in response.get("Deleted", []))
-            failed.extend(
-                DeleteFailure(
-                    key=entry.get("Key", ""),
-                    code=entry.get("Code", ""),
-                    message=entry.get("Message", ""),
-                )
-                for entry in response.get("Errors", [])
-            )
-        return DeleteReport(deleted=tuple(deleted), failed=tuple(failed))
+        return await delete_objects(self._session, bucket, keys)
 
     async def copy_object(
         self,
@@ -215,45 +187,36 @@ class S3Client:
     ) -> None:
         """Copy one object to another key, possibly in another bucket.
 
-        Args:
-            source_bucket: Where the object is now.
-            source_key: The object to copy.
-            target_bucket: Where it should end up.
-            target_key: The key it should end up under.
-            content_type: A replacement content type. Given one, S3 is told to replace the
-                metadata rather than copy it, which is the only way to change it — an ordinary
-                copy carries the source's across.
+        Giving `content_type` tells S3 to *replace* the metadata rather than copy it, which is
+        the only way to change it — see `dexter.aws.s3.copying`.
 
         Raises:
             ObjectNotFoundError: If the source object does not exist.
             AwsRequestError: If the copy was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        await self._copy(
-            source_bucket, source_key, target_bucket, target_key, content_type
+        await copy_object(
+            self._session,
+            source_bucket,
+            source_key,
+            target_bucket,
+            target_key,
+            content_type=content_type,
         )
 
     async def move_object(self, bucket: str, source_key: str, target_key: str) -> None:
         """Move an object within one bucket, by copying and then deleting.
 
-        **S3 has no move**, so this is two operations and cannot be atomic. What it does
-        guarantee is the direction of the failure: the delete only runs once the copy has been
-        confirmed, so an interruption leaves the object under both keys rather than under
-        neither. Copying and deleting unconditionally is how the object is lost — a copy can
-        answer 200 with a failure in its body.
+        **S3 has no move**, so this is two operations and cannot be atomic — but the delete runs
+        only once the copy is confirmed, so an interruption leaves the object under both keys
+        rather than under neither. See `dexter.aws.s3.copying`.
 
         Raises:
-            ObjectNotFoundError: If the source object does not exist.
+            ObjectNotFoundError: If the source does not exist, or the copy was not confirmed.
             AwsRequestError: If either half was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        response = await self._copy(bucket, source_key, bucket, target_key, None)
-        if not response.get("CopyObjectResult"):
-            raise ObjectNotFoundError(
-                f"s3://{bucket}/{source_key} was not copied to {target_key}, so it has "
-                f"not been deleted."
-            )
-        await self.delete_object(bucket, source_key)
+        await move_object(self._session, bucket, source_key, target_key)
 
     async def get_object_tags(self, bucket: str, key: str) -> dict[str, str]:
         """The object's tags, as a plain mapping.
@@ -262,35 +225,21 @@ class S3Client:
             AwsRequestError: If the read was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        response = await call(
-            f"GetObjectTagging s3://{bucket}/{key}",
-            lambda: self._session.s3.get_object_tagging(Bucket=bucket, Key=key),
-        )
-        return {tag["Key"]: tag["Value"] for tag in response.get("TagSet", [])}
+        return await get_object_tags(self._session, bucket, key)
 
     async def put_object_tags(
         self, bucket: str, key: str, tags: Mapping[str, str]
     ) -> None:
         """Replace the object's tags with `tags`.
 
-        **Replaces rather than merges**, which is the operation S3 offers and the one worth
-        exposing. A read-modify-write "add one tag" helper would look convenient and would lose
-        a concurrent tag every time two callers ran it at once; a caller who wants that reads
-        the tags, changes them, and writes them back where the race is visible.
+        **Replaces rather than merges** — an empty mapping clears them. See
+        `dexter.aws.s3.tagging` for why there is no "add one tag" helper.
 
         Raises:
             AwsRequestError: If the write was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        tag_set = [{"Key": name, "Value": value} for name, value in tags.items()]
-        await call(
-            f"PutObjectTagging s3://{bucket}/{key}",
-            lambda: self._session.s3.put_object_tagging(
-                Bucket=bucket,
-                Key=key,
-                Tagging={"TagSet": tag_set},  # type: ignore[typeddict-item]
-            ),
-        )
+        await put_object_tags(self._session, bucket, key, tags)
 
     def list_objects(
         self,
@@ -357,55 +306,4 @@ class S3Client:
             key,
             content_type=content_type,
             expires_in_seconds=expires_in_seconds,
-        )
-
-    async def _delete_chunk(self, bucket: str, keys: Sequence[str], /) -> Any:
-        """Delete one chunk of at most a thousand keys.
-
-        Its own method rather than a lambda built inside the loop, because a closure over a loop
-        variable is what ruff's B023 exists to catch.
-        """
-        return await call(
-            f"DeleteObjects s3://{bucket}",
-            lambda: self._session.s3.delete_objects(
-                Bucket=bucket,
-                Delete={"Objects": [{"Key": key} for key in keys]},
-            ),
-        )
-
-    async def _copy(
-        self,
-        source_bucket: str,
-        source_key: str,
-        target_bucket: str,
-        target_key: str,
-        content_type: str | None,
-        /,
-    ) -> Any:
-        """The shared half of `copy_object` and `move_object`."""
-        request: dict[str, Any] = {
-            "Bucket": target_bucket,
-            "Key": target_key,
-            "CopySource": {"Bucket": source_bucket, "Key": source_key},
-        }
-        if content_type is not None:
-            # Without `REPLACE`, S3 copies the source's metadata and ignores this entirely —
-            # succeeding while changing nothing, which is the worst of the available outcomes.
-            request["ContentType"] = content_type
-            request["MetadataDirective"] = "REPLACE"
-
-        def copy() -> Any:
-            try:
-                return self._session.s3.copy_object(**request)
-            except ClientError as error:
-                if error_code(error) in MISSING_OBJECT_CODES:
-                    raise ObjectNotFoundError(
-                        f"s3://{source_bucket}/{source_key} does not exist."
-                    ) from error
-                raise
-
-        return await call(
-            f"CopyObject s3://{source_bucket}/{source_key} to "
-            f"s3://{target_bucket}/{target_key}",
-            copy,
         )

@@ -1,9 +1,14 @@
-"""Reading and writing documents.
+"""The ten operations, and what each one answers.
 
-Ten operations over the client API. Three things run through all of them:
+Everything under them is somewhere else: `_requests.py` assembles what goes on the wire,
+`_items.py` owns the type policy, `_expressions.py` compiles conditions, `_batching.py` chunks
+and retries, `transactions.py` handles all-or-nothing, and `paging.py` walks a result set. This
+file is the surface a consumer reads.
+
+Three things run through all of it:
 
 - **Items are ordinary Python values on the way in and out.** DynamoDB's `{"S": "..."}` wire form
-  appears on no signature; `_items.py` owns the conversion and the policy behind it.
+  appears on no signature.
 - **Absence is `None`, never an exception.** `get_item` answers `None`, `transact_get_items`
   answers a list with `None` in it, and a query that matches nothing yields nothing. There is no
   `ItemNotFoundError`, for the same reason `head_object` has none.
@@ -20,60 +25,27 @@ silently stops at the first megabyte.
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from botocore.exceptions import ClientError
-
-from .._calling import call, error_code
-from ..errors import (
-    BatchIncompleteError,
-    ConditionFailedError,
-    TransactionConflictError,
-)
+from .._calling import call
 from ..models import (
     Condition,
-    DeleteRequest,
     Item,
     ItemKey,
-    PutRequest,
-    TransactConditionCheck,
-    TransactDelete,
     TransactGet,
-    TransactPut,
-    TransactUpdate,
     TransactWrite,
     WriteRequest,
 )
 from ..session import AwsSession
-from ._batching import backoff, chunked, count_unprocessed
-from ._expressions import (
-    Expression,
-    compile_condition,
-    compile_pair,
-    compile_update,
-    merge,
+from . import _failures, _requests
+from ._batching import (
+    READ_BATCH_SIZE,
+    WRITE_BATCH_SIZE,
+    chunked,
+    read_batch,
+    write_batch,
 )
 from ._items import deserialise, serialise
 from .paging import ItemStream
-
-CONDITION_FAILED_CODE = "ConditionalCheckFailedException"
-"""What DynamoDB says when a single conditional write's condition was false."""
-
-CANCELLED_CONDITION_CODE = "ConditionalCheckFailed"
-"""The same failure, as a transaction's cancellation reason.
-
-**Not the same string**, and the missing `Exception` suffix is the whole trap: a transaction is
-refused with `TransactionCanceledException`, and the per-entry reasons inside it use this shorter
-code. Comparing the reasons against the exception code above matches nothing, so every cancelled
-transaction would surface as a bare request error with the cause buried in an array nobody read.
-"""
-
-WRITE_BATCH_SIZE = 25
-"""How many entries one `BatchWriteItem` may carry. A hard service limit."""
-
-READ_BATCH_SIZE = 100
-"""How many keys one `BatchGetItem` may carry. A hard service limit."""
-
-TRANSACTION_SIZE = 100
-"""How many entries one transaction may carry. Raised from 25 by the service in 2022."""
+from .transactions import transact_get, transact_write
 
 
 class DynamoDbClient:
@@ -108,16 +80,9 @@ class DynamoDbClient:
             AwsRequestError: If the read was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        request: dict[str, Any] = {
-            "TableName": table,
-            "Key": serialise(key),
-            "ConsistentRead": consistent_read,
-        }
-        if attributes:
-            projection = compile_projection(attributes)
-            request["ProjectionExpression"] = projection.expression
-            request["ExpressionAttributeNames"] = projection.names
-
+        request = _requests.get_request(
+            table, key, consistent_read=consistent_read, attributes=attributes
+        )
         response = await call(
             f"GetItem {table}",
             lambda: self._session.dynamodb.get_item(**request),
@@ -143,9 +108,9 @@ class DynamoDbClient:
             CredentialsUnavailableError: If this process has no usable identity.
         """
         request: dict[str, Any] = {"TableName": table, "Item": serialise(item)}
-        _apply_condition(request, condition)
+        _requests.apply_condition(request, condition)
 
-        await call(f"PutItem {table}", lambda: self._put(request))
+        await call(f"PutItem {table}", lambda: _failures.put(self._session, request))
 
     async def update_item(  # noqa: PLR0913 - SET/REMOVE/ADD/DELETE are four distinct operations
         self,
@@ -182,29 +147,19 @@ class DynamoDbClient:
             AwsRequestError: If the write was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        update = compile_update(
+        request = _requests.update_request(
+            table,
+            key,
             set_values=dict(set_values) if set_values else None,
             remove=tuple(remove),
             add=dict(add) if add else None,
             delete=dict(delete) if delete else None,
+            condition=condition,
+            return_updated=return_updated,
         )
-        check = compile_condition(condition) if condition is not None else None
-        names, values = merge(update, check)
-
-        request: dict[str, Any] = {
-            "TableName": table,
-            "Key": serialise(key),
-            "UpdateExpression": update.expression,
-            "ReturnValues": "ALL_NEW" if return_updated else "NONE",
-        }
-        if check is not None:
-            request["ConditionExpression"] = check.expression
-        if names:
-            request["ExpressionAttributeNames"] = names
-        if values:
-            request["ExpressionAttributeValues"] = values
-
-        response = await call(f"UpdateItem {table}", lambda: self._update(request))
+        response = await call(
+            f"UpdateItem {table}", lambda: _failures.update(self._session, request)
+        )
         attributes = response.get("Attributes")
         return deserialise(attributes) if attributes else None
 
@@ -222,9 +177,11 @@ class DynamoDbClient:
             CredentialsUnavailableError: If this process has no usable identity.
         """
         request: dict[str, Any] = {"TableName": table, "Key": serialise(key)}
-        _apply_condition(request, condition)
+        _requests.apply_condition(request, condition)
 
-        await call(f"DeleteItem {table}", lambda: self._delete(request))
+        await call(
+            f"DeleteItem {table}", lambda: _failures.delete(self._session, request)
+        )
 
     def query(  # noqa: PLR0913 - index, filter, projection and direction are independent choices
         self,
@@ -255,28 +212,16 @@ class DynamoDbClient:
                 secondary index.
             page_size: How many items to ask for per request.
         """
-        keys, rest = compile_pair(key_condition, filter)
-        projection = compile_projection(attributes) if attributes else None
-        names, values = merge(keys, rest, projection)
-
-        request: dict[str, Any] = {
-            "TableName": table,
-            "KeyConditionExpression": keys.expression,
-            "ScanIndexForward": ascending,
-            "ConsistentRead": consistent_read,
-            "Limit": page_size,
-        }
-        if index is not None:
-            request["IndexName"] = index
-        if rest is not None:
-            request["FilterExpression"] = rest.expression
-        if projection is not None:
-            request["ProjectionExpression"] = projection.expression
-        if names:
-            request["ExpressionAttributeNames"] = names
-        if values:
-            request["ExpressionAttributeValues"] = values
-
+        request = _requests.query_request(
+            table,
+            key_condition,
+            index=index,
+            condition=filter,
+            attributes=attributes,
+            ascending=ascending,
+            consistent_read=consistent_read,
+            page_size=page_size,
+        )
         return ItemStream(self._session, table, "Query", request)
 
     def scan(  # noqa: PLR0913 - as `query`, plus the two halves of a parallel scan
@@ -307,26 +252,15 @@ class DynamoDbClient:
                 together; one alone is refused by the service.
             page_size: How many items to ask for per request.
         """
-        rest = compile_condition(filter) if filter is not None else None
-        projection = compile_projection(attributes) if attributes else None
-        names, values = merge(rest, projection)
-
-        request: dict[str, Any] = {"TableName": table, "Limit": page_size}
-        if index is not None:
-            request["IndexName"] = index
-        if rest is not None:
-            request["FilterExpression"] = rest.expression
-        if projection is not None:
-            request["ProjectionExpression"] = projection.expression
-        if segment is not None:
-            request["Segment"] = segment
-        if total_segments is not None:
-            request["TotalSegments"] = total_segments
-        if names:
-            request["ExpressionAttributeNames"] = names
-        if values:
-            request["ExpressionAttributeValues"] = values
-
+        request = _requests.scan_request(
+            table,
+            index=index,
+            condition=filter,
+            attributes=attributes,
+            segment=segment,
+            total_segments=total_segments,
+            page_size=page_size,
+        )
         return ItemStream(self._session, table, "Scan", request)
 
     async def batch_get_items(
@@ -349,20 +283,18 @@ class DynamoDbClient:
             CredentialsUnavailableError: If this process has no usable identity.
         """
         found: dict[str, list[Item]] = {table: [] for table in requests}
-        pending: list[dict[str, Any]] = []
         for table, keys in requests.items():
-            pending.extend(
-                {
-                    table: {
-                        "Keys": [serialise(key) for key in chunk],
-                        "ConsistentRead": consistent_read,
-                    }
-                }
-                for chunk in chunked(list(keys), READ_BATCH_SIZE)
-            )
-
-        for chunk in pending:
-            await self._read_batch(chunk, found)
+            for chunk in chunked(list(keys), READ_BATCH_SIZE):
+                await read_batch(
+                    self._session,
+                    {
+                        table: {
+                            "Keys": [serialise(key) for key in chunk],
+                            "ConsistentRead": consistent_read,
+                        }
+                    },
+                    found,
+                )
         return found
 
     async def batch_write_items(
@@ -378,15 +310,12 @@ class DynamoDbClient:
             AwsRequestError: If a request was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        entries: list[dict[str, Any]] = []
         for table, writes in requests.items():
-            entries.extend(
-                {table: [_write_entry(write) for write in chunk]}
-                for chunk in chunked(list(writes), WRITE_BATCH_SIZE)
-            )
-
-        for chunk in entries:
-            await self._write_batch(chunk)
+            for chunk in chunked(list(writes), WRITE_BATCH_SIZE):
+                await write_batch(
+                    self._session,
+                    {table: [_requests.write_entry(write) for write in chunk]},
+                )
 
     async def transact_write_items(
         self, items: Sequence[TransactWrite], *, request_token: str | None = None
@@ -395,41 +324,18 @@ class DynamoDbClient:
 
         Args:
             items: Up to a hundred puts, updates, deletes and condition checks.
-            request_token: An idempotency token. **Never invented here** — one dexter generated
-                would differ on the caller's own retry, which is precisely when idempotency is
-                supposed to help, so generating one would be a lie about a guarantee.
+            request_token: An idempotency token. **Never invented here** — see
+                `dexter.aws.dynamodb.transactions`.
 
         Raises:
             ValueError: If `items` is empty or longer than a hundred.
-            ConditionFailedError: If any condition was false. The message names the index of the
-                entry that failed.
+            ConditionFailedError: If any condition was false, naming the entry's index.
             TransactionConflictError: If another transaction touched the same item. Retryable,
                 where a failed condition is not.
             AwsRequestError: If the transaction was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        if not items:
-            raise ValueError("A transaction must contain at least one write.")
-        if len(items) > TRANSACTION_SIZE:
-            raise ValueError(
-                f"A transaction may hold at most {TRANSACTION_SIZE} entries, and this has "
-                f"{len(items)}."
-            )
-
-        request: dict[str, Any] = {
-            "TransactItems": [_transact_entry(item) for item in items]
-        }
-        if request_token is not None:
-            request["ClientRequestToken"] = request_token
-
-        def write() -> Any:
-            try:
-                return self._session.dynamodb.transact_write_items(**request)
-            except ClientError as error:
-                _translate_cancellation(error)
-                raise
-
-        await call("TransactWriteItems", write)
+        await transact_write(self._session, items, request_token)
 
     async def transact_get_items(
         self, items: Sequence[TransactGet]
@@ -445,221 +351,4 @@ class DynamoDbClient:
             AwsRequestError: If the read was refused or could not be made.
             CredentialsUnavailableError: If this process has no usable identity.
         """
-        if not items:
-            raise ValueError("A transactional read must name at least one item.")
-        if len(items) > TRANSACTION_SIZE:
-            raise ValueError(
-                f"A transactional read may name at most {TRANSACTION_SIZE} items, and this "
-                f"names {len(items)}."
-            )
-
-        entries = [_transact_get_entry(item) for item in items]
-
-        def read() -> Any:
-            try:
-                return self._session.dynamodb.transact_get_items(TransactItems=entries)  # type: ignore[arg-type]
-            except ClientError as error:
-                _translate_cancellation(error)
-                raise
-
-        response = await call("TransactGetItems", read)
-        return [
-            deserialise(entry["Item"]) if entry.get("Item") else None
-            for entry in response.get("Responses", [])
-        ]
-
-    # ── the private halves ───────────────────────────────────────────
-    #
-    # Each conditional write catches `ClientError` inside `work`, before `_calling.call` sees
-    # it, because `ConditionalCheckFailedException` is the one code whose meaning depends on
-    # which operation raised it — a shared table in `_calling.py` could not say which condition
-    # was not met.
-
-    def _put(self, request: dict[str, Any], /) -> Any:
-        try:
-            return self._session.dynamodb.put_item(**request)
-        except ClientError as error:
-            _translate_condition(error, "The condition on the put was not met.")
-            raise
-
-    def _update(self, request: dict[str, Any], /) -> Any:
-        try:
-            return self._session.dynamodb.update_item(**request)
-        except ClientError as error:
-            _translate_condition(error, "The condition on the update was not met.")
-            raise
-
-    def _delete(self, request: dict[str, Any], /) -> Any:
-        try:
-            return self._session.dynamodb.delete_item(**request)
-        except ClientError as error:
-            _translate_condition(error, "The condition on the delete was not met.")
-            raise
-
-    async def _write_batch(self, entries: dict[str, Any], /) -> None:
-        """Send one chunk, resending whatever the service declined."""
-        pending = entries
-        for round_number in range(self._session.config.max_attempts):
-            if round_number:
-                await backoff(round_number)
-            response = await self._send_write_batch(pending)
-            unprocessed = response.get("UnprocessedItems") or {}
-            if not unprocessed:
-                return
-            pending = unprocessed
-
-        raise BatchIncompleteError(
-            f"BatchWriteItem left {count_unprocessed(pending)} entries unprocessed after "
-            f"{self._session.config.max_attempts} attempts."
-        )
-
-    async def _read_batch(
-        self, keys: dict[str, Any], found: dict[str, list[Item]], /
-    ) -> None:
-        """Send one chunk of reads, resending whatever the service declined."""
-        pending = keys
-        for round_number in range(self._session.config.max_attempts):
-            if round_number:
-                await backoff(round_number)
-            response = await self._send_read_batch(pending)
-            for table, items in response.get("Responses", {}).items():
-                found.setdefault(table, []).extend(deserialise(item) for item in items)
-            unprocessed = response.get("UnprocessedKeys") or {}
-            if not unprocessed:
-                return
-            pending = unprocessed
-
-        raise BatchIncompleteError(
-            f"BatchGetItem left {count_unprocessed(pending)} keys unprocessed after "
-            f"{self._session.config.max_attempts} attempts."
-        )
-
-    async def _send_write_batch(self, pending: dict[str, Any], /) -> Any:
-        """One `BatchWriteItem` request.
-
-        Its own method rather than a lambda built inside the retry loop, because a closure over
-        a loop variable is what ruff's B023 exists to catch.
-        """
-        return await call(
-            "BatchWriteItem",
-            lambda: self._session.dynamodb.batch_write_item(RequestItems=pending),
-        )
-
-    async def _send_read_batch(self, pending: dict[str, Any], /) -> Any:
-        """One `BatchGetItem` request, for the same reason."""
-        return await call(
-            "BatchGetItem",
-            lambda: self._session.dynamodb.batch_get_item(RequestItems=pending),
-        )
-
-
-def compile_projection(attributes: Sequence[str], /) -> Expression:
-    """The projection expression for `attributes`, with reserved words escaped.
-
-    Every attribute goes through a placeholder rather than only the ones that need it: DynamoDB
-    reserves several hundred words including `name`, `status` and `size`, and a caller should
-    not have to know the list. The `#p` prefix keeps these clear of the `#n` the condition
-    builder allocates and the `#u` an update allocates.
-    """
-    names = {f"#p{index}": name for index, name in enumerate(attributes)}
-    return Expression(", ".join(names), names, {})
-
-
-def _apply_condition(request: dict[str, Any], condition: Condition | None, /) -> None:
-    """Attach a condition to a request, if there is one."""
-    if condition is None:
-        return
-    compiled = compile_condition(condition)
-    request["ConditionExpression"] = compiled.expression
-    if compiled.names:
-        request["ExpressionAttributeNames"] = compiled.names
-    if compiled.values:
-        request["ExpressionAttributeValues"] = compiled.values
-
-
-def _translate_condition(error: ClientError, message: str, /) -> None:
-    """Raise `ConditionFailedError` if this is a failed condition, otherwise return."""
-    if error_code(error) == CONDITION_FAILED_CODE:
-        raise ConditionFailedError(message) from error
-
-
-def _translate_cancellation(error: ClientError, /) -> None:
-    """Turn a cancelled transaction into the specific reason it was cancelled.
-
-    `TransactionCanceledException` carries a `CancellationReasons` array with one entry per
-    item, and the entry that is not `None` is the one that matters. Without reading it a caller
-    cannot tell a lost condition — which must not be retried — from a conflict, which should be.
-    """
-    reasons = error.response.get("CancellationReasons") or []
-    for index, reason in enumerate(reasons):
-        code = reason.get("Code")
-        if code == CANCELLED_CONDITION_CODE:
-            raise ConditionFailedError(
-                f"The transaction was cancelled: the condition on entry {index} was not met."
-            ) from error
-        if code == "TransactionConflict":
-            raise TransactionConflictError(
-                f"The transaction was cancelled: another transaction is changing entry "
-                f"{index}."
-            ) from error
-
-
-def _write_entry(write: WriteRequest, /) -> dict[str, Any]:
-    """One `BatchWriteItem` entry."""
-    match write:
-        case PutRequest(item=item):
-            return {"PutRequest": {"Item": serialise(item)}}
-        case DeleteRequest(key=key):
-            return {"DeleteRequest": {"Key": serialise(key)}}
-
-
-def _transact_entry(item: TransactWrite, /) -> dict[str, Any]:
-    """One `TransactWriteItems` entry."""
-    match item:
-        case TransactPut(table=table, item=document, condition=condition):
-            entry: dict[str, Any] = {"TableName": table, "Item": serialise(document)}
-            _apply_condition(entry, condition)
-            return {"Put": entry}
-        case TransactDelete(table=table, key=key, condition=condition):
-            entry = {"TableName": table, "Key": serialise(key)}
-            _apply_condition(entry, condition)
-            return {"Delete": entry}
-        case TransactConditionCheck(table=table, key=key, condition=condition):
-            entry = {"TableName": table, "Key": serialise(key)}
-            _apply_condition(entry, condition)
-            return {"ConditionCheck": entry}
-        case TransactUpdate():
-            update = compile_update(
-                set_values=item.set_values,
-                remove=item.remove,
-                add=item.add,
-                delete=item.delete,
-            )
-            check = (
-                compile_condition(item.condition)
-                if item.condition is not None
-                else None
-            )
-            names, values = merge(update, check)
-            entry = {
-                "TableName": item.table,
-                "Key": serialise(item.key),
-                "UpdateExpression": update.expression,
-            }
-            if check is not None:
-                entry["ConditionExpression"] = check.expression
-            if names:
-                entry["ExpressionAttributeNames"] = names
-            if values:
-                entry["ExpressionAttributeValues"] = values
-            return {"Update": entry}
-
-
-def _transact_get_entry(item: TransactGet, /) -> dict[str, Any]:
-    """One `TransactGetItems` entry."""
-    entry: dict[str, Any] = {"TableName": item.table, "Key": serialise(item.key)}
-    if item.attributes:
-        projection = compile_projection(item.attributes)
-        entry["ProjectionExpression"] = projection.expression
-        entry["ExpressionAttributeNames"] = projection.names
-    return {"Get": entry}
+        return await transact_get(self._session, items)

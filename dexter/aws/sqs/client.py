@@ -21,8 +21,11 @@ from ._batching import (
     BATCH_SIZE,
     chunked,
     collect,
+    delete_batch,
     handle_entries,
+    send_batch,
     send_entry,
+    visibility_batch,
     visibility_entries,
 )
 from ._messages import attributes as wrap_attributes
@@ -143,7 +146,7 @@ class SqsClient:
                 send_entry(offset, message) for offset, message in enumerate(chunk)
             ]
             collect(
-                await self._send_batch(queue_url, entries),
+                await send_batch(self._session, queue_url, entries),
                 start * BATCH_SIZE,
                 succeeded,
                 failed,
@@ -230,7 +233,7 @@ class SqsClient:
         failed: list[BatchFailure] = []
         for start, chunk in enumerate(chunked(receipt_handles)):
             collect(
-                await self._delete_batch(queue_url, handle_entries(chunk)),
+                await delete_batch(self._session, queue_url, handle_entries(chunk)),
                 start * BATCH_SIZE,
                 succeeded,
                 failed,
@@ -276,52 +279,13 @@ class SqsClient:
         failed: list[BatchFailure] = []
         for start, chunk in enumerate(chunked(receipt_handles)):
             collect(
-                await self._visibility_batch(
-                    queue_url, visibility_entries(chunk, visibility_timeout_seconds)
+                await visibility_batch(
+                    self._session,
+                    queue_url,
+                    visibility_entries(chunk, visibility_timeout_seconds),
                 ),
                 start * BATCH_SIZE,
                 succeeded,
                 failed,
             )
         return BatchResult(succeeded=tuple(succeeded), failed=tuple(failed))
-
-    # Each batch request is its own method rather than a lambda built inside the loops above.
-    # A closure over a loop variable is what ruff's B023 exists to catch — it is only safe there
-    # because the call is awaited in the same iteration, and "safe for a reason that is one edit
-    # away from being false" is not worth a suppression.
-
-    async def _send_batch(
-        self, queue_url: str, entries: list[dict[str, Any]], /
-    ) -> Any:
-        """Send one chunk of at most ten messages."""
-        return await call(
-            f"SendMessageBatch to {queue_url}",
-            lambda: self._session.sqs.send_message_batch(
-                QueueUrl=queue_url,
-                Entries=entries,  # type: ignore[arg-type]
-            ),
-        )
-
-    async def _delete_batch(
-        self, queue_url: str, entries: list[dict[str, Any]], /
-    ) -> Any:
-        """Delete one chunk of at most ten messages."""
-        return await call(
-            f"DeleteMessageBatch from {queue_url}",
-            lambda: self._session.sqs.delete_message_batch(
-                QueueUrl=queue_url,
-                Entries=entries,  # type: ignore[arg-type]
-            ),
-        )
-
-    async def _visibility_batch(
-        self, queue_url: str, entries: list[dict[str, Any]], /
-    ) -> Any:
-        """Change the visibility of one chunk of at most ten messages."""
-        return await call(
-            f"ChangeMessageVisibilityBatch on {queue_url}",
-            lambda: self._session.sqs.change_message_visibility_batch(
-                QueueUrl=queue_url,
-                Entries=entries,  # type: ignore[arg-type]
-            ),
-        )
