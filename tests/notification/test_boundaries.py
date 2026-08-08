@@ -52,7 +52,7 @@ class TestTheSeamIsReal:
 
     @pytest.mark.parametrize("source", modules(), ids=lambda path: path.name)
     def test_only_the_engine_imports_an_http_client(self, source: Path) -> None:
-        if source.parent.name == ENGINE:
+        if source.parent.name in {ENGINE, "ses"}:
             return
         offending = distributions(source) & CLIENTS
         assert not offending, (
@@ -69,11 +69,23 @@ class TestTheSeamIsReal:
 
     @pytest.mark.parametrize("source", modules(), ids=lambda path: path.name)
     def test_nothing_imports_another_dexter_module(self, source: Path) -> None:
+        """Except the SES engine, which is an adapter over one.
+
+        The allowance is scoped to `ses/` rather than granted to the module, so the core stays
+        importable with no AWS anywhere in the process — which is what
+        `TestWhatImportingPullsIn` then asserts by running it.
+        """
         allowed = {"dexter.commons", "dexter.dependency_injection"}
+        if source.parent.name == "ses":
+            allowed |= {"dexter.aws"}
         reached = {
             name for name in imported_modules(source) if name.startswith("dexter.")
         }
         assert reached <= allowed, f"{source} imports {reached - allowed}"
+
+    def test_the_ses_engine_really_does_import_aws(self) -> None:
+        """The negative check above would pass if the engine were simply broken."""
+        assert "dexter.aws" in imported_modules(PACKAGE / "ses" / "notifier.py")
 
 
 class TestWhatImportingPullsIn:
@@ -104,3 +116,19 @@ class TestWhatImportingPullsIn:
             check=True,
         )
         assert result.stdout.strip() == "True"
+
+    def test_importing_the_core_does_not_import_aws(self) -> None:
+        """What keeps the SES engine's cost inside the SES engine."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, dexter.notification; print('boto3' in sys.modules)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "False", (
+            "importing dexter.notification pulled in boto3; the seam has been broken"
+        )

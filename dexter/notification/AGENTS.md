@@ -10,11 +10,14 @@ Sends messages without naming who sends them.
 | `errors.py` | `NotificationError` and `DeliveryError`. That is the whole tree |
 | `recording.py` | `RecordingEmailNotifier` — records, sends nothing |
 | `use.py` | `use_recording_notification` |
-| `resend/` | The engine — **the only directory that may import an HTTP client** |
+| `resend/` | An engine — **the only directory that may import an HTTP client** |
+| `ses/` | An engine — **the only directory that may import `dexter.aws`** |
 
-The boundary is enforced by `tests/notification/test_boundaries.py`, by AST walk *and* by a
-subprocess check that importing the core leaves `httpx` out. That check is what makes
-`httpx` an optional extra (`dexter[resend]`) rather than a dependency every consumer inherits.
+Both boundaries are enforced by `tests/notification/test_boundaries.py`, by AST walk *and* by a
+subprocess check that importing the core leaves `httpx` and `boto3` out. The first is what makes
+`httpx` an optional extra (`dexter[resend]`) rather than a dependency every consumer inherits;
+the second is what keeps the direction of the AWS dependency straight — `dexter.aws` names no
+module here, and `ses/` is the one place the arrow points inward.
 
 ## Decisions that are not obvious from the code
 
@@ -23,6 +26,12 @@ own a registry; this one owns none, so a `use_notification` that registered noth
 scenery. What it has instead is one `use_*` per engine, which is AGENTS.md's rule read
 literally. Calling two binds `EmailNotifier` twice and the container refuses the second — the
 right failure, because the alternative is an application that sends real mail from its tests.
+
+**The two engines are asymmetric, and the asymmetry follows the configuration.** Resend needs an
+API key, so it has a `ResendConfig` and a `register_resend_config`. SES needs a region and a
+verified identity, and both belong to `dexter.aws` — so `use_ses_notification` takes nothing and
+`use_aws` must have run. A `register_ses_config` would be this module inventing a second place to
+write down what `AwsConfig` already says.
 
 **Each `use_*` binds one object under both keys.** `EmailNotifier` for code that should name the
 contract, and the concrete class for wiring or a test that deliberately names the engine. Two

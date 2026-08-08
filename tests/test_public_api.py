@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import dexter
+import dexter.aws
 import dexter.tools
 from dexter.api import (
     ApiError,
@@ -63,6 +64,86 @@ from dexter.application import (
     register_module,
     use_application,
 )
+from dexter.aws import (
+    AccessDeniedError,
+    And,
+    Attr,
+    AttributeType,
+    AwsConfig,
+    AwsEndpoints,
+    AwsError,
+    AwsRequestError,
+    AwsSession,
+    AwsWiringError,
+    BatchFailure,
+    BatchIncompleteError,
+    BatchResult,
+    BatchSuccess,
+    BeginsWith,
+    Between,
+    Comparison,
+    ComparisonOperator,
+    Condition,
+    ConditionFailedError,
+    Contains,
+    CredentialsUnavailableError,
+    DeleteFailure,
+    DeleteReport,
+    DeleteRequest,
+    DynamoDbClient,
+    EmailRejectedError,
+    Exists,
+    In,
+    Item,
+    ItemEncodingError,
+    ItemKey,
+    ItemPage,
+    ItemStream,
+    MessageAttribute,
+    MessageTooLargeError,
+    Not,
+    NotExists,
+    ObjectNotFoundError,
+    ObjectPage,
+    ObjectSummary,
+    Or,
+    OutboundMessage,
+    ParameterNotFoundError,
+    ParameterStoreClient,
+    ParameterValue,
+    PutRequest,
+    ReceivedMessage,
+    ResourceNotFoundError,
+    RetryMode,
+    S3Client,
+    SecretNotFoundError,
+    SecretsManagerClient,
+    SecretValue,
+    SesClient,
+    SmsType,
+    SnsClient,
+    SqsClient,
+    StaticValue,
+    ThrottledError,
+    TransactConditionCheck,
+    TransactDelete,
+    TransactGet,
+    TransactionConflictError,
+    TransactPut,
+    TransactUpdate,
+    TransactWrite,
+    TtlCache,
+    ValueSource,
+    WriteRequest,
+    describe_comparison_operator,
+    describe_retry_mode,
+    describe_sms_type,
+    register_aws_config,
+    register_parameter_value,
+    register_secret_value,
+    use_aws,
+)
+from dexter.aws import Key as DynamoKey
 from dexter.cli import (
     ACCENT,
     Capture,
@@ -241,6 +322,7 @@ from dexter.notification.resend import (
     register_resend_config,
     use_resend_notification,
 )
+from dexter.notification.ses import SesEmailNotifier, use_ses_notification
 from dexter.tools.pins import (
     Change,
     declared,
@@ -755,3 +837,104 @@ class TestNotificationSurface:
         assert result.stdout.strip() == "False", (
             "importing dexter.notification pulled in httpx; the seam has been broken"
         )
+
+
+class TestAwsSurface:
+    def test_the_clients_are_exported(self) -> None:
+        assert {
+            S3Client,
+            DynamoDbClient,
+            SecretsManagerClient,
+            ParameterStoreClient,
+            SesClient,
+            SnsClient,
+            SqsClient,
+        }
+
+    def test_the_session_and_its_configuration_are_exported(self) -> None:
+        assert {AwsSession, AwsConfig, AwsEndpoints, RetryMode}
+
+    def test_the_value_contract_and_its_implementations_are_exported(self) -> None:
+        # The provider pattern: a marker the application declares, three ways to satisfy it.
+        assert {ValueSource, StaticValue, SecretValue, ParameterValue}
+
+    def test_the_wiring_entry_points_are_exported(self) -> None:
+        assert {
+            use_aws,
+            register_aws_config,
+            register_secret_value,
+            register_parameter_value,
+        }
+
+    def test_the_answer_shapes_are_exported(self) -> None:
+        assert {ObjectSummary, ObjectPage, DeleteReport, DeleteFailure}
+        assert {ReceivedMessage, OutboundMessage, MessageAttribute}
+        assert {BatchResult, BatchSuccess, BatchFailure}
+        assert {ItemPage, PutRequest, DeleteRequest, TransactGet}
+        assert {Item, ItemKey, WriteRequest, TransactWrite}
+        assert {TransactPut, TransactUpdate, TransactDelete, TransactConditionCheck}
+
+    def test_the_condition_vocabulary_is_exported(self) -> None:
+        # Named `Key` in `dexter.aws`, and imported here as `DynamoKey` because
+        # `dexter.dependency_injection` already owns the plain name in this file.
+        assert {Attr, DynamoKey, Condition}
+        assert {Comparison, Between, BeginsWith, Contains, Exists, NotExists}
+        assert {In, AttributeType, And, Or, Not}
+
+    def test_the_streams_and_the_cache_are_exported(self) -> None:
+        # A consumer annotating what `list_objects` or `query` returns needs these.
+        assert {ItemStream, TtlCache}
+
+    def test_every_error_is_exported(self) -> None:
+        errors = {
+            AwsError,
+            AwsRequestError,
+            AwsWiringError,
+            AccessDeniedError,
+            ThrottledError,
+            CredentialsUnavailableError,
+            ResourceNotFoundError,
+            ObjectNotFoundError,
+            SecretNotFoundError,
+            ParameterNotFoundError,
+            ItemEncodingError,
+            ConditionFailedError,
+            TransactionConflictError,
+            BatchIncompleteError,
+            EmailRejectedError,
+            MessageTooLargeError,
+        }
+        assert all(issubclass(error, AwsError) for error in errors)
+        assert issubclass(AwsError, DexterError)
+
+    def test_the_retryable_failures_are_reachable_as_request_errors(self) -> None:
+        # Both are under `AwsRequestError`, so an existing `except AwsRequestError` keeps
+        # catching them. `ConditionFailedError` deliberately is not: nothing was wrong with
+        # the request.
+        assert issubclass(ThrottledError, AwsRequestError)
+        assert issubclass(AccessDeniedError, AwsRequestError)
+        assert not issubclass(ConditionFailedError, AwsRequestError)
+
+    def test_the_enums_follow_the_enum_convention(self) -> None:
+        for enum in (RetryMode, SmsType, ComparisonOperator):
+            assert all(member.value == member.name for member in enum)
+        assert describe_retry_mode(RetryMode.STANDARD) == "RetryMode.STANDARD"
+        assert describe_sms_type(SmsType.TRANSACTIONAL) == "SmsType.TRANSACTIONAL"
+        assert (
+            describe_comparison_operator(ComparisonOperator.EQUALS)
+            == "ComparisonOperator.EQUALS"
+        )
+
+    def test_no_boto3_type_reaches_the_public_surface(self) -> None:
+        """The module's central promise. See `tests/aws/test_boundaries.py` for the rest."""
+        for name in dir(dexter.aws):
+            if name.startswith("_"):
+                continue
+            module = getattr(getattr(dexter.aws, name), "__module__", "")
+            assert not module.startswith(("boto3", "botocore", "mypy_boto3")), name
+
+    def test_the_notifier_seam_lives_in_the_notification_module(self) -> None:
+        """`dexter.aws` names no other dexter module; the adapter points the other way."""
+        assert not hasattr(dexter.aws, "SesEmailNotifier")
+        assert SesEmailNotifier.__module__.startswith("dexter.notification.ses")
+        assert use_ses_notification is not None

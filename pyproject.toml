@@ -17,8 +17,14 @@ dynamic = ["version"]
 # as query parameters (`Annotated[Model, Query()]`) arrived in 0.115.0, and `dexter.api` binds
 # a whole request model from the query string with them. `pyjwt>=2.10` is a hard floor as
 # well: it is the release that added `py.typed`, without which `dexter.iam.jwt_codec` cannot
-# be checked under mypy strict.
+# be checked under mypy strict. `boto3` is here for `dexter.aws`, and it is the one dependency
+# in this list that is a *replacement* rather than an addition: signing an AWS request is
+# signature version 4 over a canonicalised request, and reaching AWS at all means a credential
+# chain covering environment variables, profiles, `credential_process`, container endpoints and
+# instance metadata, with refresh. Every one of those is code whose best possible outcome is
+# behaving exactly like boto3 already does.
 dependencies = [
+    "boto3>=1.43.65",
     "click>=8.4.2",
     "fastapi>=0.141.0",
     "pydantic>=2.13.4",
@@ -86,7 +92,16 @@ test = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
 ]
-lint = ["ruff>=0.16.0", "mypy>=2.3.0"]
+# `boto3-stubs` is here rather than in `[project.dependencies]` because stubs are a development
+# concern: botocore ships no `py.typed`, so `mypy --strict` cannot see a single client method
+# without them — the same problem that floored `pyjwt` at 2.10, met the other way round. A
+# consumer type-checking their own code brings their own stubs; inheriting ours would pin them to
+# the services *we* happen to speak.
+lint = [
+    "boto3-stubs[dynamodb,s3,secretsmanager,sesv2,sns,sqs,ssm]>=1.43.65",
+    "ruff>=0.16.0",
+    "mypy>=2.3.0",
+]
 
 # ─────────────────────────────── ruff ────────────────────────────────
 [tool.ruff]

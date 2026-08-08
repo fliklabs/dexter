@@ -24,7 +24,8 @@ drives an event loop on your behalf.
 | `dexter.cli` | Implemented — a keyboard-navigable CLI you register commands into |
 | `dexter.api` | Implemented — typed request handlers, served over HTTP |
 | `dexter.iam` | Implemented — magic-code login, JWT access and refresh tokens, per-route authentication |
-| `dexter.notification` | Implemented — sending email through a contract, with a Resend engine |
+| `dexter.notification` | Implemented — sending email through a contract, with Resend and SES engines |
+| `dexter.aws` | Implemented — S3, DynamoDB, Secrets Manager, SSM, SES, SNS and SQS |
 | `dexter.application` | Implemented — composing a service from modules |
 
 ## Install
@@ -33,12 +34,12 @@ drives an event loop on your behalf.
 uv add "dexter @ git+https://github.com/fliklabs/dexter"
 ```
 
-Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi` and `pyjwt`. Three floors are hard:
-earlier pydantic has no cp314 wheel and fails to build on Python 3.14, pydantic models as query
-parameters arrived in fastapi 0.115, and pyjwt gained `py.typed` in 2.0. `click` and `rich` are
-what `dexter.cli` is built from, `fastapi` what `dexter.api.http` is built from, and `pyjwt`
-what `dexter.iam` signs with; modules are imported directly, so a consumer who never touches one
-never imports it.
+Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi`, `pyjwt` and `boto3`. Three floors
+are hard: earlier pydantic has no cp314 wheel and fails to build on Python 3.14, pydantic models
+as query parameters arrived in fastapi 0.115, and pyjwt gained `py.typed` in 2.0. `click` and
+`rich` are what `dexter.cli` is built from, `fastapi` what `dexter.api.http` is built from,
+`pyjwt` what `dexter.iam` signs with, and `boto3` what `dexter.aws` talks to AWS with; modules
+are imported directly, so a consumer who never touches one never imports it.
 
 Sending email through Resend needs an HTTP client, which is an **extra** rather than something
 every consumer inherits:
@@ -613,6 +614,12 @@ use_resend_notification(builder)
 register_resend_config(builder, ResendConfig(api_key=settings.resend_api_key))
 ```
 
+```python
+from dexter.notification.ses import use_ses_notification
+
+use_ses_notification(builder)  # needs use_aws(builder); the region is AwsConfig's
+```
+
 Exactly one of those. Calling two binds `EmailNotifier` twice and the container refuses the
 second — the right failure, because the alternative is real mail sent from a test suite.
 
@@ -627,7 +634,82 @@ assert "Your code is" in recorder.last.body.data
 
 dexter renders nothing — a subject and a body arrive composed, because templating is a choice
 most consumers have already made. `httpx` is an extra, not a dependency: importing
-`dexter.notification` pulls in no HTTP client, and a test enforces that.
+`dexter.notification` pulls in no HTTP client — and no `boto3` either, though the SES engine is
+right there. A test enforces both.
+
+## AWS
+
+Seven clients over one boto3 session. Every method is `async def`, and **no boto3 type appears on
+any signature** — a `ClientError` never reaches your code, and neither does a `Binary` or a
+`ConditionBase`:
+
+```python
+from dexter.aws import AwsConfig, DynamoDbClient, S3Client, register_aws_config, use_aws
+
+use_aws(builder)
+register_aws_config(builder, AwsConfig(region="ap-southeast-2"))
+```
+
+```python
+class StorePhoto:
+    def __init__(self, storage: S3Client) -> None:
+        self.storage = storage
+
+    async def upload_url(self, item_id: str) -> str:
+        return await self.storage.presigned_put_url(
+            BUCKET, f"items/{item_id}/photo.jpg", content_type="image/jpeg"
+        )
+```
+
+Queries read as Python, and `Key` offers only the operators a key condition actually allows — so
+`Key("sk").contains(...)` is a type error rather than a service error:
+
+```python
+from dexter.aws.dynamodb import Attr, Key
+
+stream = orders.query(
+    "orders",
+    key_condition=Key("pk").equals("u#1") & Key("sk").begins_with("order#"),
+    filter=Attr("status").not_equals("CANCELLED"),
+)
+async for order in stream:  # pages until there is genuinely nothing left
+    ...
+```
+
+Nothing truncates: `list_objects`, `query`, `scan` and `get_parameters_by_path` all paginate, and
+none takes a `max_keys` that silently caps. Batches never return `None` — S3, SQS and SNS answer
+`200` with the refused entries in the body, and DynamoDB answers `200` with an `UnprocessedItems`
+map, so partial failure comes back as a report and unprocessed writes are retried.
+
+### Configuration values
+
+A component depends on a **value**, never on the store it lives in, so the same code runs against
+a settings file locally and Secrets Manager in production:
+
+```python
+from dexter.aws import StaticValue, ValueSource, register_secret_value
+
+
+class DatabasePassword(ValueSource, Protocol):
+    """The application's own marker for one configured value."""
+
+
+# locally: no AWS account, no credentials, no network
+builder.register(DatabasePassword).to_instance(StaticValue("hunter2"))
+
+# deployed
+register_secret_value(
+    builder,
+    DatabasePassword,
+    secret_id="app/production/secrets",
+    secret_key="DATABASE_PASSWORD",
+    scope=Scope.SINGLETON,
+)
+```
+
+The value is fetched at first use rather than at wiring time — so `build_container()` still runs
+in CI with no credentials — and cached, with one in-flight fetch per secret however many callers
+arrive at once. `SecretValue`'s `repr` names the location and never the value.
 
 ## Application
 

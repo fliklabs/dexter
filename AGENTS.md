@@ -20,7 +20,8 @@ framework. Read source files directly — there is no external documentation.
 | `dexter.cli` | Implemented | A keyboard-navigable CLI. Ships no commands — consumers register their own |
 | `dexter.api` | Implemented | Typed request handlers, exposed over HTTP. `dexter.api.http` is the only part that knows a web framework exists |
 | `dexter.iam` | Implemented | Who is calling: magic codes in, signed tokens out. `dexter.iam.api` is the only part that knows `dexter.api` exists. No authorization |
-| `dexter.notification` | Implemented | Sending messages without naming who sends them. `dexter.notification.resend` is the only part that speaks HTTP |
+| `dexter.notification` | Implemented | Sending messages without naming who sends them. `dexter.notification.resend` is the only part that speaks HTTP, and `dexter.notification.ses` the only part that names `dexter.aws` |
+| `dexter.aws` | Implemented | Seven AWS clients over one boto3 session, async throughout. No boto3 type on any signature — see `dexter/aws/AGENTS.md` |
 | `dexter.application` | Implemented | Composing an application from modules. The only module that depends on two others, which is its job |
 | `dexter.tools` | Implemented | Development-time tooling that ships. **Not framework** — see `dexter/tools/AGENTS.md` for why it is allowed to be here |
 | `dexter.caching` | Planned | Cache abstractions |
@@ -238,9 +239,9 @@ Traps when introspecting constructors, every one of them verified:
 `pytest` with `pytest-asyncio` in auto mode for tests. Configuration lives entirely in
 `pyproject.toml`.
 
-**Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi`, `pyjwt`.** Every
+**Runtime dependencies: `pydantic`, `click`, `rich`, `fastapi`, `pyjwt`, `boto3`.** Every
 one was a deliberate decision, because consumers inherit everything declared here — and a
-module they never import still lands in their install. Adding a sixth is the same decision
+module they never import still lands in their install. Adding a seventh is the same decision
 again, not a convenience.
 
 | Dependency | Why | Floor is hard because |
@@ -250,6 +251,7 @@ again, not a convenience.
 | `rich` | `dexter.cli`'s output | — |
 | `fastapi` | `dexter.api`'s routing, validation and schema generation | Pydantic models as query parameters arrived in 0.115.0, and a route whose path names no parameter binds its whole request model that way |
 | `pyjwt` | `dexter.iam`'s signing and verification | `py.typed` arrived in 2.0, and without it `jwt_codec.py` cannot be checked under strict mode |
+| `boto3` | `dexter.aws`'s seven clients | Nothing here is a floor; it is the one dependency that *replaces* code rather than adding it. Signature version 4 and a credential chain covering profiles, `credential_process`, container endpoints and instance metadata are code whose best outcome is parity |
 
 **Optional extras: `dexter[resend]` brings `httpx`.** The extras table is the *other* answer to
 the same question, and it is preferred wherever the packaging can express it: a dependency only
@@ -260,6 +262,13 @@ every existing import.
 | Extra | Brings | For |
 | --- | --- | --- |
 | `resend` | `httpx` | `dexter.notification.resend`, and nothing else imports it |
+
+`boto3` is not behind an extra, and that is a decision rather than an oversight. It backs a whole
+module rather than one engine of one, its type stubs (`boto3-stubs`, in the `lint` group) are a
+development concern a consumer should own for the services *they* use, and `dexter.notification`'s
+SES engine would otherwise need a second extra to express one dependency. The boundary is still
+enforced — `tests/aws/test_boundaries.py` keeps boto3 inside the files that must speak it, and
+`tests/notification/test_boundaries.py` keeps it out of the notification core entirely.
 
 The declared floors themselves live in `pyproject.toml` and are not repeated here: `./upgrade.sh`
 raises them, and a number written in two places is a number that will eventually disagree. What
